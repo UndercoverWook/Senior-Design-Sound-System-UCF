@@ -1,7 +1,7 @@
 # Senior-Design-Sound-System-UCF
-File structure:
+##File structure:
 
-lutter_application_1/
+flutter_application_1/
 ├── lib/
 │   ├── main.dart                  # App entry point, navigation, BLE connection logic, state handling
 │   ├── pages/
@@ -14,7 +14,9 @@ lutter_application_1/
 │       └── eq_visualizer.dart     # Older EQ visualizer widget
 
 
-order of commands to run:
-flutter clean 
+## Order of Commands to Run
+```bash
+flutter clean
 flutter pub get
 flutter run -d chrome
+```
