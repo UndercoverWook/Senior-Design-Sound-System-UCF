@@ -1,3 +1,5 @@
+#include "driver/uart.h"
+#include "hal/uart_types.h"
 #include "soc/clk_tree_defs.h"
 #include <cstdio>
 #include <stdint.h>
@@ -33,14 +35,14 @@ static i2s_chan_handle_t mcu_rx = NULL;
 static i2s_chan_handle_t mcu_tx = NULL;
 static wave_reader_handle_t wav_hdl = NULL;
 static const gpio_num_t I2S_DIN_LINE  = GPIO_NUM_2;		// Data out from BM83 to MCU through I2S
-static const gpio_num_t I2S_LRCLK_PIN = GPIO_NUM_4;	// LRCLK line connected to the BM83 and DAC
-static const gpio_num_t I2S_BCLK_PIN  = GPIO_NUM_5;	// Bit Clock line connected to the BM83 and DAC
-static const gpio_num_t I2S_DOUT_LINE = GPIO_NUM_6;	// Data out from MCU to DAC through I2S
+static const gpio_num_t I2S_LRCLK_PIN = GPIO_NUM_4;		// LRCLK line connected to the BM83 and DAC
+static const gpio_num_t I2S_BCLK_PIN  = GPIO_NUM_5;		// Bit Clock line connected to the BM83 and DAC
+static const gpio_num_t I2S_DOUT_LINE = GPIO_NUM_6;		// Data out from MCU to DAC through I2S
 static const gpio_num_t BT_WAKE		  = GPIO_NUM_48;	// Connected to MFB pin from BM83 to put it in pairing mode
 
 
 #define SAMPLE_RATE      44100									// Sampling Rate (Matched with BM83)
-#define BUFFER_FRAMES  	 2048            						// frames (stereo frames) captured and transmitted 
+#define BUFFER_FRAMES  	 1024            						// frames (stereo frames) captured and transmitted 
 #define BYTES_PER_SAMPLE 2               						// 16-bit => 2 bytes per channel sample
 #define CHANNELS         2										// We are using Left & Right
 #define FRAME_SIZE_BYTES (BYTES_PER_SAMPLE * CHANNELS)   		// 4 bytes per frame (16-bit stereo)
@@ -54,6 +56,8 @@ static const gpio_num_t BT_WAKE		  = GPIO_NUM_48;	// Connected to MFB pin from B
 static void i2s_bt_to_mcu_to_dac_init ()
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+	chan_cfg.dma_desc_num = 16;
+	chan_cfg.dma_frame_num = 512;
 
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &mcu_tx, &mcu_rx));
     
@@ -69,15 +73,15 @@ static void i2s_bt_to_mcu_to_dac_init ()
 			.ws   = I2S_LRCLK_PIN,
 			.dout = I2S_DOUT_LINE,
 			.din  = I2S_GPIO_UNUSED,
-			.invert_flags = {.ws_inv = true}
+			.invert_flags = {.ws_inv = false}
 	    },
 	};
 	
 	// Initialize Full-Duplex Standard mode and enable both channels
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &std_cfg));
 	ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &std_cfg));
-    ESP_ERROR_CHECK(i2s_channel_enable(mcu_rx));
+    //ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &std_cfg));
+    //ESP_ERROR_CHECK(i2s_channel_enable(mcu_rx));
 }// end of i2s_bt_to_mcu_init
 
 
@@ -117,66 +121,76 @@ static void print_wav(wave_header_t *wav_head)
 	ESP_LOGI(WAV_FILE, "Samples per Channel: %u", wav_head->samples_per_channel);
 }
 
-
-extern "C" void app_main()
-{	
-    i2s_bt_to_mcu_to_dac_init();
-	configure_spiffs();
-	
+void vTask1(void* args)
+{
 	wave_header_t wav_head;
-	wav_hdl = wave_reader_open("/storage/1khz_sine_44_1.wav");
-		
-	if (wav_hdl == NULL) {
-		ESP_LOGE(WAV_FILE, "Unable to open read!");
-	}
-		
-	if (wave_read_header(wav_hdl, &wav_head) == 0) {
-		print_wav(&wav_head);
-	} else {
-		ESP_LOGE(WAV_FILE, "Unable to read WAV file header!");
-		return;
-	}
-	
-	uint8_t out;
-	uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Allocate space to store data coming from BT module
-	assert(buff);	
-	size_t wrote, pos = 0;
-	
-	while (1)
-	{
-		//i2s_channel_read(mcu_rx, buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);		// Read data from BM83
-		size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);		// Read from WAV file
-		
-		if (bytes_read == 0){
-			ESP_LOGW(TAG, "WAV playback finished!");
-			break;
+		wav_hdl = wave_reader_open("/storage/1khz_sine_44_1.wav");
+			
+		if (wav_hdl == NULL) {
+			ESP_LOGE(WAV_FILE, "Unable to open read!");
 		}
 		
-		pos += bytes_read;
-		size_t bytes_to_w = bytes_read;
-		uint8_t *p = buff;
+		if (wave_read_header(wav_hdl, &wav_head) == 0) {
+			print_wav(&wav_head);
+		} else {
+			ESP_LOGE(WAV_FILE, "Unable to read WAV file header!");
+			return;
+		}
 		
-		while (bytes_to_w > 0) {
-			wrote = 0;
-			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
+		uint8_t out;
+		uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Allocate space to store data coming from BT module
+		assert(buff);	
+		size_t wrote, pos = 0;
+		
+		while (1)
+		{
+			//i2s_channel_read(mcu_rx, buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);		// Read data from BM83
+			size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);		// Read from WAV file
 			
-			if (r != ESP_OK){
-				ESP_LOGE(TAG, "I2S threw ERROR: %d", r);
+			if (bytes_read == 0){
+				ESP_LOGW(TAG, "WAV playback finished!");
 				break;
 			}
 			
-			if (wrote == 0) {
-				vTaskDelay(pdMS_TO_TICKS(1));
-				continue;
-			}
-			bytes_to_w -= wrote;
-			p += wrote;
-		}// end of inner while loop
-		//taskYIELD();
-	}// end of main while loop 
+			pos += bytes_read;
+			size_t bytes_to_w = bytes_read;
+			uint8_t *p = buff;
+			
+			while (bytes_to_w > 0) {
+				wrote = 0;
+				esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
+				
+				if (r != ESP_OK){
+					ESP_LOGE(TAG, "I2S threw ERROR: %d", r);
+					break;
+				}
+				
+				if (wrote == 0) {
+					vTaskDelay(pdMS_TO_TICKS(1));
+					continue;
+				}
+				bytes_to_w -= wrote;
+				p += wrote;
+			}// end of inner while loop
+			//taskYIELD();
+		}// end of main while loop 
+		i2s_channel_disable(mcu_tx);
+		wave_reader_close(wav_hdl);	// close wav file
+		free(buff);
+		vTaskDelete(NULL);
+}
+
+extern "C" void app_main()
+{	
+	uart_driver_delete(UART_NUM_0);
+	gpio_reset_pin(GPIO_NUM_43);
+	gpio_reset_pin(GPIO_NUM_44);
+	gpio_set_direction(GPIO_NUM_43, GPIO_MODE_INPUT);
+	gpio_set_direction(GPIO_NUM_44, GPIO_MODE_INPUT);
+    i2s_bt_to_mcu_to_dac_init();
+	configure_spiffs();
 	
-	wave_reader_close(wav_hdl);	// close wav file
-	free(buff);
+	xTaskCreatePinnedToCore(vTask1, "Playback", 8192, NULL, configMAX_PRIORITIES - 1, NULL, 1);
 	
-	return;
+	
 }// end of main
