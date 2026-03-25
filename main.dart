@@ -36,7 +36,7 @@ class _MyAppState extends State<MyApp> {
   BluetoothCharacteristic? _rxChar;
   BluetoothCharacteristic? _txChar;
 
-  StreamSubscription? _txSubscription;
+  StreamSubscription<ByteData>? _txSubscription;
 
   double _volume = 0.5;
   final List<double> _eqBands = List<double>.filled(5, 0.0);
@@ -47,36 +47,68 @@ class _MyAppState extends State<MyApp> {
   String _room = 'Living Room';
   double _latencyMs = 50;
 
+  bool _isDarkMode = true;
+
   @override
   void dispose() {
     _txSubscription?.cancel();
     super.dispose();
   }
 
+  ThemeData _buildLightTheme() {
+    return ThemeData(
+      brightness: Brightness.light,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.deepPurple,
+        brightness: Brightness.light,
+      ),
+      useMaterial3: true,
+    );
+  }
+
+  ThemeData _buildDarkTheme() {
+    return ThemeData(
+      brightness: Brightness.dark,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.deepPurple,
+        brightness: Brightness.dark,
+      ),
+      useMaterial3: true,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final theme = _isDarkMode ? _buildDarkTheme() : _buildLightTheme();
+
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(),
-      home: Scaffold(
-        body: SafeArea(child: _buildBody()),
-        bottomNavigationBar: BottomNavigationBar(
-          currentIndex: _currentIndex,
-          selectedItemColor: Colors.deepPurpleAccent,
-          unselectedItemColor: Colors.white54,
-          onTap: (i) => setState(() => _currentIndex = i),
-          items: const [
-            BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.equalizer),
-              label: "Control",
+      theme: theme,
+      home: Builder(
+        builder: (context) {
+          final isDark = Theme.of(context).brightness == Brightness.dark;
+
+          return Scaffold(
+            body: SafeArea(child: _buildBody()),
+            bottomNavigationBar: BottomNavigationBar(
+              currentIndex: _currentIndex,
+              selectedItemColor: theme.colorScheme.primary,
+              unselectedItemColor: isDark ? Colors.white54 : Colors.black54,
+              onTap: (i) => setState(() => _currentIndex = i),
+              items: const [
+                BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.equalizer),
+                  label: "Control",
+                ),
+                BottomNavigationBarItem(
+                  icon: Icon(Icons.settings),
+                  label: "Settings",
+                ),
+              ],
             ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.settings),
-              label: "Settings",
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -113,6 +145,7 @@ class _MyAppState extends State<MyApp> {
             });
             _sendResetEqCommand();
           },
+          onPlayTestTone: _sendPlayWavCommand,
         );
 
       case 2:
@@ -125,6 +158,8 @@ class _MyAppState extends State<MyApp> {
           onRoom: (r) => setState(() => _room = r),
           latencyMs: _latencyMs,
           onLatency: (l) => setState(() => _latencyMs = l),
+          isDarkMode: _isDarkMode,
+          onThemeToggle: (value) => setState(() => _isDarkMode = value),
         );
 
       default:
@@ -255,54 +290,56 @@ class _MyAppState extends State<MyApp> {
       return;
     }
 
+    _device = device;
+    _eqService = eqService;
+    _rxChar = rx;
+    _txChar = tx;
+
     try {
-      await tx.startNotifications();
-      debugPrint("TX notifications started.");
+      if (tx.hasProperties && tx.properties.notify) {
+        await tx.startNotifications();
+        _txSubscription?.cancel();
+        _txSubscription = tx.value.listen((event) {
+          try {
+            final bytes = event.buffer.asUint8List(
+              event.offsetInBytes,
+              event.lengthInBytes,
+            );
+            final msg = utf8.decode(bytes, allowMalformed: true);
+            debugPrint("ESP -> App: $msg");
+
+            final parsed = _parseSpectrum(msg);
+            if (parsed != null) {
+              setState(() {
+                _spectrumData = parsed;
+              });
+            }
+          } catch (e) {
+            debugPrint("Notification parse error: $e");
+          }
+        });
+      }
     } catch (e) {
-      debugPrint("Failed to start notifications: $e");
-      setState(() {
-        _connecting = false;
-        _connected = false;
-        _status = "Notify start failed";
-      });
-      return;
+      debugPrint("Notification setup failed: $e");
     }
 
-    _txSubscription?.cancel();
-    _txSubscription = tx.value.listen((ByteData data) {
-      final bytes = data.buffer.asUint8List(
-        data.offsetInBytes,
-        data.lengthInBytes,
-      );
-      final text = utf8.decode(bytes, allowMalformed: true);
-      debugPrint("BLE RX notify: $text");
-      _handleIncomingText(text);
-    });
-
     setState(() {
-      _device = device;
-      _eqService = eqService;
-      _rxChar = rx;
-      _txChar = tx;
-      _connected = true;
       _connecting = false;
-      _status = "Connected";
+      _connected = true;
+      _status = "Connected to ${device.name}";
     });
-
-    debugPrint("BLE CONNECTED SUCCESSFULLY");
   }
 
   Future<void> _disconnectWeb() async {
     try {
       await _txSubscription?.cancel();
       _txSubscription = null;
+      await _txChar?.stopNotifications();
     } catch (_) {}
 
     try {
       _device?.disconnect();
-    } catch (e) {
-      debugPrint("disconnect error: $e");
-    }
+    } catch (_) {}
 
     setState(() {
       _device = null;
@@ -311,60 +348,55 @@ class _MyAppState extends State<MyApp> {
       _txChar = null;
       _connected = false;
       _connecting = false;
-      _status = "Not connected";
+      _status = 'Not connected';
       _spectrumData = [];
     });
   }
 
-  void _handleIncomingText(String text) {
-    if (!text.startsWith("FFT:")) return;
-
-    final raw = text.substring(4).trim();
-    if (raw.isEmpty) return;
-
-    final parts = raw.split(',');
-    final values = <double>[];
-
-    for (final p in parts) {
-      final v = double.tryParse(p.trim());
-      if (v != null) {
-        values.add(v);
-      }
-    }
-
-    if (values.isEmpty) return;
-
-    setState(() {
-      _spectrumData = values;
-    });
-  }
-
   Future<void> _sendText(String text) async {
-    if (_rxChar == null || !_connected) {
-      debugPrint("Cannot send, RX characteristic is null or not connected.");
-      return;
-    }
+    final rx = _rxChar;
+    if (rx == null || !_connected) return;
 
     try {
-      await _rxChar!.writeValueWithoutResponse(
-        Uint8List.fromList(utf8.encode(text)),
-      );
-      debugPrint("BLE TX: $text");
+      final bytes = Uint8List.fromList(utf8.encode(text));
+      await rx.writeValueWithResponse(bytes);
+      debugPrint("App -> ESP: $text");
     } catch (e) {
-      debugPrint("write failed: $e");
+      debugPrint("Write failed: $e");
     }
   }
 
-  void _sendVolumeCommand(double v) {
-    final value = (v * 100).round();
-    _sendText("VOL:$value");
+  Future<void> _sendVolumeCommand(double volume) async {
+    final percent = (volume * 100).round();
+    await _sendText("VOL:$percent");
   }
 
-  void _sendEqCommand(int index, double value) {
-    _sendText("EQ$index:${value.toStringAsFixed(1)}");
+  Future<void> _sendEqCommand(int band, double value) async {
+    await _sendText("EQ$band:${value.toStringAsFixed(1)}");
   }
 
-  void _sendResetEqCommand() {
-    _sendText("EQ_RESET");
+  Future<void> _sendResetEqCommand() async {
+    await _sendText("EQ_RESET");
+  }
+
+  Future<void> _sendPlayWavCommand() async {
+    await _sendText("PLAY_WAV");
+  }
+
+  List<double>? _parseSpectrum(String msg) {
+    if (!msg.startsWith("FFT:")) return null;
+
+    try {
+      final csv = msg.substring(4).trim();
+      if (csv.isEmpty) return null;
+
+      return csv
+          .split(',')
+          .map((e) => double.tryParse(e.trim()))
+          .whereType<double>()
+          .toList();
+    } catch (_) {
+      return null;
+    }
   }
 }

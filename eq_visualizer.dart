@@ -5,15 +5,15 @@ class EqVisualizer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Container(
       height: 120,
       decoration: BoxDecoration(
-        color: Color(0xFF141722),
+        color: colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: const Center(
-        child: Text("Waiting for data..."),
-      ),
+      child: const Center(child: Text("Waiting for data...")),
     );
   }
 }
