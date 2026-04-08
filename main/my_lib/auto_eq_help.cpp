@@ -16,22 +16,20 @@
 #include "help_functions.h"
 #include "glb_params.h"
 
-#define WAV_FILE "storage/44k_full_sweep.wav"
-
-void load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
+int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
 {
     wav_hdl = wave_reader_open(filename);
 
     if (wav_hdl == NULL) {
-        ESP_LOGE(WAV_FILE, "Unable to open file: %s", filename);
-        return;
+        ESP_LOGE(WAV_TAG, "Unable to open file: %s", filename);
+        return -1;
     }
 
     uint8_t* buff = (uint8_t*)calloc(1, BUFFER_BYTES);
     if (buff == NULL) {
-        ESP_LOGE(WAV_FILE, "Failed to allocate buffer");
+        ESP_LOGE(WAV_TAG, "Failed to allocate buffer");
         wave_reader_close(wav_hdl);
-        return;
+        return -1;
     }
 
     size_t pos = 0;
@@ -58,19 +56,15 @@ void load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
 
     wave_reader_close(wav_hdl);
     free(buff);
-    return;
+
+    ESP_LOGI(WAV_TAG, "Loaded %d samples from %s", sample_count, filename);
+    return sample_count;  // Return the number of samples actually read
 }
 
-float* compute_wiener_deconvolution(uint16_t *samples, int n) 
+float* compute_wiener_deconvolution(float *X, float *Y, int n) 
 {
-    uint16_t *input_signal = (uint16_t *)heap_caps_malloc(n * sizeof(uint16_t), MALLOC_CAP_SPIRAM);  // Allocate memory for input signal (copy of samples)
-    load_wav_to_array(WAV_FILE, input_signal, n);  // Load the WAV file into the input signal array
-
-
     float reg_factor = 0.01f;
-    float *X = compute_fft(input_signal, n, SAMPLE_RATE);    // Compute FFT of the input signal (X is modified in-place to contain the FFT output)
-    float *Y = compute_fft(samples, n, SAMPLE_RATE);         // Compute FFT of the output signal (Y is modified in-place to contain the FFT output)
-
+    
     for (int i = 0; i < n; i += 2) {
         float x_re = X[i],     x_im = X[i+1];
         float y_re = Y[i],     y_im = Y[i+1];
@@ -78,8 +72,6 @@ float* compute_wiener_deconvolution(uint16_t *samples, int n)
         float x_mag_sq = x_re*x_re + x_im*x_im;
         float divisor  = x_mag_sq + reg_factor;
 
-        // H[k] = Y[k] / X[k]  =  Y[k] * conj(X[k]) / |X[k]|^2
-        // (multiply numerator and denominator by conj(X) to make denominator real)
         float h_re = (y_re*x_re + y_im*x_im) / divisor;
         float h_im = (y_im*x_re - y_re*x_im) / divisor;
 
@@ -92,8 +84,6 @@ float* compute_wiener_deconvolution(uint16_t *samples, int n)
 
 float apply_emm6_calibration(float freq_hz, float raw_db) 
 {
-
-    // Linear interpolation between nearest two points
     for (int i = 0; i < 256 - 1; i++) {
         if (freq_hz >= cal_values[i][0] && freq_hz < cal_values[i+1][0]) {
             float t = (freq_hz - cal_values[i][0]) / (cal_values[i+1][0] - cal_values[i][0]);
@@ -104,11 +94,18 @@ float apply_emm6_calibration(float freq_hz, float raw_db)
     return raw_db;
 }
 
-float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
+float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool apply_calibration)
 { 
-    float *mag        = (float *)heap_caps_malloc(NUM_BINS * sizeof(float), MALLOC_CAP_SPIRAM);
-    float *y_cf       = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float) * 2, MALLOC_CAP_DEFAULT);
-    float *wind_coeff = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_DEFAULT);
+    float *mag        = (float *)heap_caps_malloc(NUM_BINS * sizeof(float), MALLOC_CAP_8BIT);
+    float *y_cf       = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float) * 2, MALLOC_CAP_8BIT);
+    float *wind_coeff = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_8BIT);
+
+    // Check if any of the allocations failed
+    if (!mag || !y_cf || !wind_coeff) {
+        ESP_LOGE(EQ_TAG, "FFT buffer alloc failed! mag=%p y_cf=%p wind=%p", mag, y_cf, wind_coeff);
+        free(mag); free(y_cf); free(wind_coeff);
+        return NULL;
+    }
 
     dsps_wind_hann_f32(wind_coeff, FFT_SIZE);
     memset(mag, 0, NUM_BINS * sizeof(float));
@@ -142,8 +139,12 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
     for (int i = 1; i < NUM_BINS; i++) {
         float freq_hz = (float)i * sample_rate / FFT_SIZE;
         float mag_db = 20.0f * log10f(mag[i] + 1e-9f);
-        float cal_db = apply_emm6_calibration(freq_hz, mag_db);
-        mag[i] = cal_db;
+        if (apply_calibration) {
+            float cal_db = apply_emm6_calibration(freq_hz, mag_db);
+            mag[i] = cal_db;
+        } else {
+            mag[i] = mag_db;
+        }
     }
     return mag;
 }
@@ -157,8 +158,12 @@ void run_Auto_EQ_algorithm(uint16_t* samples, float *actual_freq)
     // 5) Get Correction Curve from Target Curve and IR (Frequency domain division) 
     // 6) Design FIR filters from Correction Curve 
 
-    emm6_file_to_arr();                             // Load calibration file to array before applying calibration
-    compute_fft(samples, N_SAMPLES, *actual_freq);  // Compute the FFT of the sampled data
+    // Load calibration file to array before applying calibration
+    emm6_file_to_arr();
 
-    compute_wiener_deconvolution(samples, N_SAMPLES);
+    // Take FFT of sampled data and load magnitudes from WAV file (stored in SPIFFS)
+    float *wav_mags = load_fft_cache(NUM_BINS);
+    float *sample_mags = compute_fft(samples, N_SAMPLES, *actual_freq, true);   // Apply calibration to get "true" magnitudes  
+
+    compute_wiener_deconvolution(wav_mags, sample_mags, N_SAMPLES);
 }

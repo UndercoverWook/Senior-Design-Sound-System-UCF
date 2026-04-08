@@ -11,7 +11,7 @@
 
 #include "config_functions.h"
 
-void config_spi() 
+void configure_spi() 
 {
     esp_err_t err;
 

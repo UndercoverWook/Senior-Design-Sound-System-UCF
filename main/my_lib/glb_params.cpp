@@ -26,4 +26,5 @@ const char *MIC_TAG      = "EMM6 Calibration";
 const char *TEST_TAG     = "Test Signal Playback";
 const char *SAMPLING_TAG = "ADC Sampling";
 const char *TONE_TAG     = "TONE";
-const char *WAV_FILE     = "WAV Test";
+const char *WAV_TAG      = "WAV Test";
+const char *EQ_TAG       = "Auto EQ";

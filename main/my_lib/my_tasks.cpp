@@ -31,7 +31,7 @@ void vSample_task(void *args)
         return;
     }
     ESP_LOGI(SAMPLING_TAG, "Running FFT on sampled data...");
-    //run_EQ_Algorithm(samples, &actual_fs);
+    //run_Auto_EQ_Algorithm(samples, &actual_fs);
 
     vTaskDelete(NULL);  // Delete the task when done
 }
@@ -42,14 +42,14 @@ void vPlay_WAV_Task1(void* args)
 	wav_hdl = wave_reader_open("/storage/44kh_full_sweep.wav");
 			
 	if (wav_hdl == NULL) {
-		ESP_LOGE(WAV_FILE, "Unable to open read!");
+		ESP_LOGE(WAV_TAG, "Unable to open read!");
 		return;
 	}
 		
 	if (wave_read_header(wav_hdl, &wav_head) == 0) {
 		print_wav(&wav_head);
 	} else {
-		ESP_LOGE(WAV_FILE, "Unable to read WAV file header!");
+		ESP_LOGE(WAV_TAG, "Unable to read WAV file header!");
 		return;
 	}
 		

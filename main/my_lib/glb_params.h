@@ -52,7 +52,7 @@ extern "C" {
 #define FRAME_SIZE_BYTES (BYTES_PER_SAMPLE * CHANNELS)  	 // 4 bytes per frame (16-bit stereo)
 #define BUFFER_BYTES     (BUFFER_FRAMES * FRAME_SIZE_BYTES)
 #define PACER_TIMER_HZ   10000000ULL   						 // 10 MHz => 0.1 us ticks
-#define FFT_SIZE 		 4096                                 // FFT size for frequency analysis (must be a power of 2 and)
+#define FFT_SIZE 		 2048                                 // FFT size for frequency analysis (must be a power of 2 and)
 #define NUM_BINS		 (FFT_SIZE / 2)
 #define FREQ_START		 20.0f
 #define FREQ_END		 20000.0f
@@ -61,6 +61,7 @@ extern "C" {
 #define CORE1			 1
 #define TRANSACTION_LENGTH 16             // 16 bits per sample from ADC
 #define N_SAMPLES		 (SAMPLE_RATE * TEST_DURATION)  // Number of samples to capture for testing (1 second worth of data at 48kHz)
+#define FFT_CACHE_PATH   "/storage/fft_cache.bin"
 
 // GPIOs Declarations
 static const gpio_num_t MCU_WAKE	 	= GPIO_NUM_1;		// Wake up the MCU
@@ -105,7 +106,8 @@ extern const char *MIC_TAG;
 extern const char *TEST_TAG;
 extern const char *SAMPLING_TAG;
 extern const char *TONE_TAG;
-extern const char *WAV_FILE;
+extern const char *WAV_TAG;
+extern const char *EQ_TAG;
 
 #ifdef __cplusplus
 }
