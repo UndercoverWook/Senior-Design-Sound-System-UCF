@@ -2,6 +2,7 @@
 #define MAIN_MY_FUNCTIONS_MY_TASKS_H_
 
 #pragma once
+#include "glb_params.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -1,9 +1,14 @@
 #include "my_tasks.h"
 #include "glb_params.h"
 #include "help_functions.h"
+#include "auto_eq_help.h"
+#include "config_functions.h"
+#include "my_usb_device.h"
 
 void vSample_task(void *args) 
 {
+	configure_spi();
+
     spi_transaction_t spi_t {
         .flags      = SPI_TRANS_USE_RXDATA,
         .length     = TRANSACTION_LENGTH,
@@ -12,6 +17,13 @@ void vSample_task(void *args)
 
     uint16_t *samples = (uint16_t *)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);  // Sample Data array
     
+	xEventGroupSync(
+        sync_tasks,
+        TASK_A_READY_BIT,   // bit this task sets
+        ALL_TASKS_READY,    // bits to wait for
+        portMAX_DELAY
+    );
+
     uint32_t t_start = esp_log_timestamp();
     for (int i = 0; i < N_SAMPLES; i++) {
         spi_device_polling_transmit(spi_hdl, &spi_t);  // Transmit the SPI transaction
@@ -21,36 +33,40 @@ void vSample_task(void *args)
         samples[i] = (raw_res >> 2) & 0xFFFF;  // Store only the lower 16 bits (the actual ADC value)
     }
     uint32_t t_end = esp_log_timestamp();
-    float actual_fs = (float)N_SAMPLES / ((t_end - t_start) / 1000.0f);  // Calculate actual sampling frequency
-    ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
+	
+	//ESP_LOGI(SAMPLING_TAG, "Started: %u | Finished %u", t_start, t_end);
 
-    // Initialize FFT tables (must be done before calling any FFT functions) and compute FFT
-    esp_err_t err = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
-    if (err != ESP_OK) {
-        ESP_LOGE("FFT", "Failed to initialize FFT, ERROR: %s", esp_err_to_name(err));
-        return;
-    }
-    ESP_LOGI(SAMPLING_TAG, "Running FFT on sampled data...");
+    float actual_fs = (float)N_SAMPLES / ((t_end - t_start) / 1000.0f);  // Calculate actual sampling frequency
+	//ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
+
+    // ESP_LOGI(SAMPLING_TAG, "Running FFT on sampled data...");
+	// float *mags = compute_fft(samples, N_SAMPLES, actual_fs, true);
+
+	// for (int i = 0 ; i < NUM_BINS; i++) {
+	// 	float freq_hz = (float)i * actual_fs / FFT_SIZE;
+	// 	ESP_LOGI(SAMPLING_TAG, "Bin %d: Freq = %.1f Hz, Mag = %.2f dB", i, freq_hz, mags[i]);
+	// }
+
     //run_Auto_EQ_Algorithm(samples, &actual_fs);
 
     vTaskDelete(NULL);  // Delete the task when done
 }
 
-void vPlay_WAV_Task1(void* args)
+void vPlay_WAV_task(void* args)
 {	
+	configure_i2s_for_wav();
+
 	wave_header_t wav_head;
-	wav_hdl = wave_reader_open("/storage/44kh_full_sweep.wav");
+	wav_hdl = wave_reader_open("/storage/44k_full_sweep.wav");
 			
 	if (wav_hdl == NULL) {
 		ESP_LOGE(WAV_TAG, "Unable to open read!");
-		return;
+		vTaskDelete(NULL);
 	}
 		
-	if (wave_read_header(wav_hdl, &wav_head) == 0) {
-		print_wav(&wav_head);
-	} else {
+	if (wave_read_header(wav_hdl, &wav_head) != 0) {
 		ESP_LOGE(WAV_TAG, "Unable to read WAV file header!");
-		return;
+		vTaskDelete(NULL);
 	}
 		
 	uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Allocate space to store data coming from BT module
@@ -59,7 +75,17 @@ void vPlay_WAV_Task1(void* args)
 	
 	i2s_channel_enable(mcu_tx);	// Enable I2S channel for transmission
 
-	while (1)
+	xEventGroupSync(
+        sync_tasks,
+        TASK_B_READY_BIT,
+        ALL_TASKS_READY,
+        portMAX_DELAY
+    );
+
+	const uint32_t PLAY_DURATION_MS = 5000;
+
+	uint32_t t_start = esp_log_timestamp();
+	while ((esp_log_timestamp() - t_start) < PLAY_DURATION_MS)
 	{
 		//i2s_channel_read(mcu_rx, buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);		// Read data from BM83
 		size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);		// Read from WAV file
@@ -74,7 +100,10 @@ void vPlay_WAV_Task1(void* args)
 			
 		while (bytes_to_w > 0) {
 			wrote = 0;
-			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
+			uint32_t elapsed   = esp_log_timestamp() - t_start;
+			uint32_t remaining = (elapsed < PLAY_DURATION_MS) ? (PLAY_DURATION_MS - elapsed) : 0;
+
+			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, pdMS_TO_TICKS(remaining));
 				
 			if (r != ESP_OK){
 				break;
@@ -89,6 +118,9 @@ void vPlay_WAV_Task1(void* args)
 		}// end of inner while loop
 			
 	}// end of main while loop 
+	uint32_t t_end = esp_log_timestamp();
+
+	//ESP_LOGI(WAV_TAG, "Started: %u | Finished %u", t_start, t_end);
 		
 	i2s_channel_disable(mcu_tx);
 	wave_reader_close(wav_hdl);	// close wav file
@@ -98,6 +130,8 @@ void vPlay_WAV_Task1(void* args)
 
 void vUSB_playback_task(void *arg)
 {
+	usb_uac_device_init();
+	configure_i2s_for_audio();
 	i2s_channel_enable(mcu_tx);	// Enable I2S channel for transmission
 
     while (1) {
@@ -117,14 +151,26 @@ void vUSB_playback_task(void *arg)
 
 void vBT_playback_task(void *arg)
 {
+	bm83_tx_ind_init();
+	// Wait for BT inidication of Paired Device
+	while (1) {
+        int level = gpio_get_level(MCU_WAKE);
+		if (level == 0) break;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+	ESP_LOGI(BM83_TAG, "BM83 Transmitting!");
+	configure_i2s_for_audio();
+
+	// Enable I2S channels
+	i2s_channel_enable(mcu_tx);
+	i2s_channel_enable(mcu_rx);
+
 	uint8_t *bt_buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Initialize array to store data coming from BT module
 	assert(bt_buff);	
 	
 	size_t bytes_read;
 	size_t wrote = 0;
-
-	i2s_channel_enable(mcu_tx);	// Enable I2S channel for transmission (to DAC)
-	i2s_channel_enable(mcu_rx);	// Enable I2S channel for reception (from BT module)
 	
 	// Read bytes from the Bluetooth Module (MCU acts as Receiver) and echo/send it to the DAC (MCU acts as Sender)
 	while (1)
@@ -136,10 +182,10 @@ void vBT_playback_task(void *arg)
 		
 		while (bytes_to_w > 0)
 		{			
-			//ESP_LOGI(TAG, "Bytes to write: [%d]", (unsigned)bytes_to_w);
 			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
 	
 			if (r != ESP_OK){
+				ESP_LOGE(I2S_TAG, "I2S threw ERROR: %d", r);
 				break;
 			}
 			

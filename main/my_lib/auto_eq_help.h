@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+// Function to print FFT results
+void show_FFT(float *y_cf, int n, float sample_rate);
+
 // Function to run the AutoEQ algorithm on the sampled data
 void run_Auto_EQ_algorithm(uint16_t* samples, float *actual_freq);
 
@@ -24,7 +27,7 @@ float* compute_wiener_deconvolution(float *X, float *Y, int n);
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples);
 
 // Function to calculate correction curve from target curve and IR (Frequency domain division)
-float* calculate_correction_curve(float *target_curve, float *ir_freq_domain, int n);
+float* calculate_correction_curve(float *ir_freq_domain, int n);
 
 #ifdef __cplusplus
 }

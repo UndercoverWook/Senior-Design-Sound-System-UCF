@@ -6,7 +6,7 @@
  */
 
 #include <math.h>
-#include "usb_device.h"
+#include "my_usb_device.h"
 
 static bool is_muted = false;
 static uint32_t volume_factor = 100;

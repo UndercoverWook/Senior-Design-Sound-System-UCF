@@ -16,8 +16,8 @@
 extern "C" {
 #endif
 
-// Function to wake up the BM83 module by toggling the MFB pin
-void bm83_wakeup ();
+// Function to wake up the BM83 module
+void bm83_tx_ind_init(void);
 
 // Function to print the contents of a wave header struct
 void print_wav(wave_header_t *wav_head);
@@ -31,6 +31,8 @@ void save_fft_cache(float* mag, int num_bins);
 // Function to load FFT magnitudes from a cache file
 float* load_fft_cache(int num_bins);
 
+// Load FFT magnitudes, or if not cached, compute them from the WAV file and cache the results
+void wav_to_fft();
 
 #ifdef __cplusplus
 }

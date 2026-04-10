@@ -38,7 +38,7 @@ void configure_spi()
         .dummy_bits     = 0,
         .mode           = 0,
         .clock_source   = SPI_CLK_SRC_DEFAULT,
-        .clock_speed_hz = 1700000, // 1.7 MHz (Max. is 2.4 MHz)
+        .clock_speed_hz = 2070000, // 2.1 MHz (Max. is 2.4 MHz)
         .spics_io_num   = ADC_CS_PIN,
         .queue_size     = 1,
     };
@@ -89,7 +89,7 @@ void configure_i2s_for_wav()
 void configure_i2s_for_audio()
 {
 	esp_err_t err;
-	i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_SLAVE);
+	i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
 
 	err = i2s_new_channel(&chan_cfg, &mcu_tx, &mcu_rx);
 	
@@ -99,6 +99,7 @@ void configure_i2s_for_audio()
 	}
 	
 	i2s_std_clk_config_t clk_config = I2S_STD_CLK_DEFAULT_CONFIG(48000);
+	clk_config.clk_src = I2S_CLK_SRC_PLL_160M;
 	clk_config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
 	i2s_std_config_t std_cfg = {
@@ -110,7 +111,6 @@ void configure_i2s_for_audio()
 			.ws   = I2S_LRCLK_PIN,
 			.dout = I2S_TX_LINE,
 			.din  = I2S_RX_LINE,
-			.invert_flags = {.ws_inv = false}
 		},
 	};
 
@@ -120,6 +120,8 @@ void configure_i2s_for_audio()
 
 	gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
 	esp_rom_gpio_connect_out_signal(GPIO_NUM_2, 0x100, false, false);
+	//gpio_set_drive_capability(GPIO_NUM_21, GPIO_DRIVE_CAP_1); // BCLK
+	//gpio_set_drive_capability(GPIO_NUM_11, GPIO_DRIVE_CAP_1); // WS
 }
 
 void configure_spiffs()

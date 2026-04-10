@@ -16,6 +16,38 @@
 #include "help_functions.h"
 #include "glb_params.h"
 
+void show_FFT(float *y_cf, int n, float sample_rate) 
+{
+    float *mags = (float *)heap_caps_malloc(NUM_BINS * sizeof(float), MALLOC_CAP_8BIT);
+    if (!mags) {
+        ESP_LOGE(EQ_TAG, "FFT mag buffer alloc failed!");
+        return;
+    }
+
+    int hop        = NUM_BINS;
+    int num_chunks = (n - FFT_SIZE) / hop;
+
+    for (int i = 0; i < num_chunks; i++) {
+        for (int k = 0; k < NUM_BINS; k++) {
+            float re = y_cf[k*2 + 0];
+            float im = y_cf[k*2 + 1];
+            mags[k] += sqrtf(re*re + im*im) / (FFT_SIZE / 2);
+        }
+    }
+
+    for (int i = 0; i < NUM_BINS; i++) mags[i] /= num_chunks;
+
+    for (int i = 0; i < NUM_BINS; i++) {
+        float freq_hz = (float)i * sample_rate / FFT_SIZE;
+        float mag_db = 20.0f * log10f(mags[i] + 1e-9f);
+        float cal_db = apply_emm6_calibration(freq_hz, mag_db);
+        mags[i] = cal_db;
+    }
+    
+    heap_caps_free(mags);
+
+}
+
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
 {
     wav_hdl = wave_reader_open(filename);
@@ -82,6 +114,7 @@ float* calculate_correction_curve(float *ir_freq_domain, int n)
             correction_curve[i*2 + 1] = -4.0f;   // Cap the correction to prevent extreme boosts
         } else correction_curve[i*2 + 1] = -ir_im / divisor;   // Im(1/H)
     }
+    free(ir_freq_domain);
     return correction_curve;
 }
 
@@ -126,14 +159,13 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool a
     float *wind_coeff = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_8BIT);
 
     // Check if any of the allocations failed
-    if (!mag || !y_cf || !wind_coeff) {
-        ESP_LOGE(EQ_TAG, "FFT buffer alloc failed! mag=%p y_cf=%p wind=%p", mag, y_cf, wind_coeff);
-        free(mag); free(y_cf); free(wind_coeff);
+    if (!y_cf || !wind_coeff) {
+        ESP_LOGE(EQ_TAG, "FFT buffer alloc failed! y_cf=%p wind=%p", y_cf, wind_coeff);
+        free(y_cf); free(wind_coeff);
         return NULL;
     }
 
     dsps_wind_hann_f32(wind_coeff, FFT_SIZE);
-    memset(mag, 0, NUM_BINS * sizeof(float));
 
     int hop        = NUM_BINS;
     int num_chunks = (num_samples - FFT_SIZE) / hop;
@@ -149,45 +181,62 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool a
         dsps_fft2r_fc32_aes3(y_cf, FFT_SIZE);
         dsps_bit_rev_fc32(y_cf, FFT_SIZE);
 
-        for (int k = 0; k < NUM_BINS; k++) {
-            float re = y_cf[k*2 + 0];
-            float im = y_cf[k*2 + 1];
-            mag[k] += sqrtf(re*re + im*im) / (FFT_SIZE / 2);
-        }
+        // for (int k = 0; k < NUM_BINS; k++) {
+        //     float re = y_cf[k*2 + 0];
+        //     float im = y_cf[k*2 + 1];
+        //     mag[k] += sqrtf(re*re + im*im) / (FFT_SIZE / 2);
+        // }
     }
 
-    for (int i = 0; i < NUM_BINS; i++) mag[i] /= num_chunks;
+    return y_cf;
 
-    free(y_cf);
-    free(wind_coeff);
+    // for (int i = 0; i < NUM_BINS; i++) mag[i] /= num_chunks;
 
-    for (int i = 1; i < NUM_BINS; i++) {
-        float freq_hz = (float)i * sample_rate / FFT_SIZE;
-        float mag_db = 20.0f * log10f(mag[i] + 1e-9f);
-        if (apply_calibration) {
-            float cal_db = apply_emm6_calibration(freq_hz, mag_db);
-            mag[i] = cal_db;
-        } else {
-            mag[i] = mag_db;
-        }
-    }
-    return mag;
+    // free(y_cf);
+    // free(wind_coeff);
+
+    // for (int i = 0; i < NUM_BINS; i++) {
+    //     float freq_hz = (float)i * sample_rate / FFT_SIZE;
+    //     float mag_db = 20.0f * log10f(mag[i] + 1e-9f);
+    //     if (apply_calibration) {
+    //         float cal_db = apply_emm6_calibration(freq_hz, mag_db);
+    //         mag[i] = cal_db;
+    //     } else {
+    //         mag[i] = mag_db;
+    //     }
+    // }
+    // return mag;
 }
 
 void run_Auto_EQ_algorithm(uint16_t* samples, float *actual_freq) 
-{
-    // 5) Get Correction Curve from Target Curve and IR (Frequency domain division) 
-    // 6) Design FIR filters from Correction Curve 
+{   
+    // Initialize FFT tables (must be done before calling any FFT functions) and compute FFT
+    esp_err_t err = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE("FFT", "Failed to initialize FFT, ERROR: %s", esp_err_to_name(err));
+        return;
+    }
+
+    // Make wav file to FFT
+    wav_to_fft();
 
     // Load calibration file to array before applying calibration
     emm6_file_to_arr();
 
     // Take FFT of sampled data and load magnitudes from WAV file (stored in SPIFFS)
-    float *wav_mags = load_fft_cache(NUM_BINS);
-    float *sample_mags = compute_fft(samples, N_SAMPLES, *actual_freq, true);   // Apply calibration to get "true" magnitudes  
-
+    float *wav_fft = load_fft_cache(NUM_BINS);
+    float *sample_fft = compute_fft(samples, N_SAMPLES, *actual_freq, true);   // Apply calibration to get "true" magnitudes
+    
     // Compute Wiener deconvolution on the magnitudes
-    float *H = compute_wiener_deconvolution(wav_mags, sample_mags, NUM_BINS);
-    float *correction_curve = calculate_correction_curve(H, NUM_BINS);
+    float *H = compute_wiener_deconvolution(wav_fft, sample_fft, FFT_SIZE);
 
+    // Calculate correction curve based on Target Curve (1.0 across all bins)
+    // and the computed H (system response) using Wiener deconvolution
+    float *correction_curve = calculate_correction_curve(H, FFT_SIZE);
+
+    // Turn correction curve into FIR filter coefficients (IFFT)
+    ESP_ERROR_CHECK(dsps_cplx2reC_fc32(correction_curve, FFT_SIZE));
+
+    // Design FIR filters from the correction curve
+    
 }

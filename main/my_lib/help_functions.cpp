@@ -7,15 +7,18 @@
 
 #include "help_functions.h"
 #include "glb_params.h"
+#include "auto_eq_help.h"
 #include <math.h>
 
-void bm83_wakeup ()
-{
-	gpio_set_direction(BT_WAKE, GPIO_MODE_OUTPUT);
-	gpio_set_level(BT_WAKE, 1);   // Pull MFB high
-	vTaskDelay(pdMS_TO_TICKS(10));  // Hold for ~5 ms (safely above 2 ms minimum)
-	gpio_set_level(BT_WAKE, 0);   // Release
-	vTaskDelay(pdMS_TO_TICKS(2));   // Brief settle before sending UART
+void bm83_tx_ind_init(void) {
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << MCU_WAKE),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,  // Active low, so pull up
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
 }
 
 
@@ -92,4 +95,28 @@ float* load_fft_cache(int num_bins)
 
     ESP_LOGI(WAV_TAG, "FFT cache loaded (%d bins)", num_bins);
     return mag;
+}
+
+void wav_to_fft()
+{
+	float* mag = load_fft_cache(NUM_BINS);
+
+    if (mag == NULL) {
+        ESP_LOGI(WAV_TAG, "No cache found, running full FFT pipeline...");
+
+        ESP_ERROR_CHECK(dsps_fft2r_init_fc32(NULL, FFT_SIZE));
+
+        uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        int count = load_wav_to_array("/storage/44k_full_sweep.wav", samples, N_SAMPLES);
+
+        mag = compute_fft(samples, count, 44100.0f, false);
+
+        free(samples);
+        dsps_fft2r_deinit_fc32();
+
+        save_fft_cache(mag, NUM_BINS);
+    } else {
+        ESP_LOGI(WAV_TAG, "Loaded FFT results from cache, skipping pipeline");
+    }
+    free(mag);
 }

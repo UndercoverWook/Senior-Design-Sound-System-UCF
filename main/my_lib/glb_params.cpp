@@ -8,14 +8,15 @@
 #include "glb_params.h"
 
 
-gptimer_handle_t     sync_timer  = NULL;
-spi_device_handle_t  spi_hdl     = NULL;
-i2s_chan_handle_t    mcu_tx      = NULL;
-i2s_chan_handle_t    mcu_rx      = NULL;
-wave_reader_handle_t wav_hdl     = NULL;
-TaskHandle_t         task1_hdl   = NULL;
-TaskHandle_t         task2_hdl   = NULL;
+gptimer_handle_t     sync_timer    = NULL;
+spi_device_handle_t  spi_hdl       = NULL;
+i2s_chan_handle_t    mcu_tx        = NULL;
+i2s_chan_handle_t    mcu_rx        = NULL;
+wave_reader_handle_t wav_hdl       = NULL;
+TaskHandle_t         task1_hdl     = NULL;
+TaskHandle_t         task2_hdl     = NULL;
 RingbufHandle_t      audio_ringbuf = NULL;
+EventGroupHandle_t   sync_tasks    = NULL;
 
 float cal_values[256][2]    = {};
 
@@ -25,6 +26,6 @@ const char *I2S_TAG      = "I2S Configuration";
 const char *MIC_TAG      = "EMM6 Calibration";
 const char *TEST_TAG     = "Test Signal Playback";
 const char *SAMPLING_TAG = "ADC Sampling";
-const char *TONE_TAG     = "TONE";
 const char *WAV_TAG      = "WAV Test";
 const char *EQ_TAG       = "Auto EQ";
+const char *BM83_TAG     = "BM83 UART";
