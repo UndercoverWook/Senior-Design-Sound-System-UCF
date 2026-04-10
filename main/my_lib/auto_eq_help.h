@@ -18,10 +18,13 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool a
 float apply_emm6_calibration(float freq_hz, float raw_db);
 
 // Function to compute Wiener Deconvolution in frequency domain
-float* compute_wiener_deconvolution(uint16_t *samples, int n);
+float* compute_wiener_deconvolution(float *X, float *Y, int n);
 
 // Function to load the WAV file and convert it to an array of samples
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples);
+
+// Function to calculate correction curve from target curve and IR (Frequency domain division)
+float* calculate_correction_curve(float *target_curve, float *ir_freq_domain, int n);
 
 #ifdef __cplusplus
 }

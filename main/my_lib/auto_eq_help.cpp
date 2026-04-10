@@ -61,6 +61,30 @@ int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
     return sample_count;  // Return the number of samples actually read
 }
 
+float* calculate_correction_curve(float *ir_freq_domain, int n)
+{
+    float *correction_curve = (float *)heap_caps_malloc(2 * n * sizeof(float), MALLOC_CAP_8BIT);
+    if (!correction_curve) {
+        ESP_LOGE(EQ_TAG, "Failed to allocate correction curve buffer");
+        return NULL;
+    }
+
+    for (int i = 0; i < n; i++) {
+        float ir_re  = ir_freq_domain[i*2 + 0];
+        float ir_im  = ir_freq_domain[i*2 + 1];
+        float divisor = ir_re*ir_re + ir_im*ir_im + 1e-9f;
+
+        if (ir_re/divisor > 4.0f) {
+            correction_curve[i*2 + 0] =  4.0f;   // Cap the correction to prevent extreme boosts
+        } else correction_curve[i*2 + 0] = ir_re / divisor;
+        
+        if (ir_im/divisor > 4.0f) {
+            correction_curve[i*2 + 1] = -4.0f;   // Cap the correction to prevent extreme boosts
+        } else correction_curve[i*2 + 1] = -ir_im / divisor;   // Im(1/H)
+    }
+    return correction_curve;
+}
+
 float* compute_wiener_deconvolution(float *X, float *Y, int n) 
 {
     float reg_factor = 0.01f;
@@ -78,6 +102,7 @@ float* compute_wiener_deconvolution(float *X, float *Y, int n)
         Y[i]   = h_re;
         Y[i+1] = h_im;
     }
+    free(X);
 
     return Y;
 }
@@ -151,10 +176,6 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool a
 
 void run_Auto_EQ_algorithm(uint16_t* samples, float *actual_freq) 
 {
-    // 1) Wiener Deconvolution (returns a pointer to Transfer Function (Impulse Response) in frequency domain)
-    // 2) Transfer function time domain conversion (IFFT, returns pointer to impulse response (time-domain))
-    // 3) Apply Hann window to the impulse response
-    // 4) Take FFT of the windowed impulse response (returns pointer of Impulse Response in frequency domain)
     // 5) Get Correction Curve from Target Curve and IR (Frequency domain division) 
     // 6) Design FIR filters from Correction Curve 
 
@@ -165,5 +186,8 @@ void run_Auto_EQ_algorithm(uint16_t* samples, float *actual_freq)
     float *wav_mags = load_fft_cache(NUM_BINS);
     float *sample_mags = compute_fft(samples, N_SAMPLES, *actual_freq, true);   // Apply calibration to get "true" magnitudes  
 
-    compute_wiener_deconvolution(wav_mags, sample_mags, N_SAMPLES);
+    // Compute Wiener deconvolution on the magnitudes
+    float *H = compute_wiener_deconvolution(wav_mags, sample_mags, NUM_BINS);
+    float *correction_curve = calculate_correction_curve(H, NUM_BINS);
+
 }
