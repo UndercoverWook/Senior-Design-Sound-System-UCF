@@ -1,0 +1,6 @@
+dependencies:
+  idf:
+    version: '*'
+description: library to read and write WAVE (.wav) files
+url: https://github.com/mateusglucas/esp-idf-components/tree/master/components/wave
+version: 1.0.1
