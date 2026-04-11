@@ -29,7 +29,6 @@ static void finish_play_test_if_done()
 
 void vSample_task(void *args)
 {
-    // Give playback a little more breathing room on the other core.
     if (uxTaskPriorityGet(NULL) > 1) {
         vTaskPrioritySet(NULL, uxTaskPriorityGet(NULL) - 1);
     }
@@ -43,10 +42,10 @@ void vSample_task(void *args)
         return;
     }
 
-    spi_transaction_t spi_t {
-        .flags      = SPI_TRANS_USE_RXDATA,
-        .length     = TRANSACTION_LENGTH,
-        .rxlength   = TRANSACTION_LENGTH,
+    spi_transaction_t spi_t{
+        .flags = SPI_TRANS_USE_RXDATA,
+        .length = TRANSACTION_LENGTH,
+        .rxlength = TRANSACTION_LENGTH,
     };
 
     uint16_t *samples = (uint16_t *)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
@@ -62,11 +61,11 @@ void vSample_task(void *args)
         sync_tasks,
         TASK_A_READY_BIT,
         ALL_TASKS_READY,
-        portMAX_DELAY
-    );
+        portMAX_DELAY);
 
     const uint64_t cpu_ticks_per_us = (uint64_t)esp_rom_get_cpu_ticks_per_us();
-    const uint32_t cycles_per_sample = (uint32_t)((cpu_ticks_per_us * 1000000ULL + (SAMPLE_RATE / 2)) / SAMPLE_RATE);
+    const uint32_t cycles_per_sample =
+        (uint32_t)((cpu_ticks_per_us * 1000000ULL + (SAMPLE_RATE / 2)) / SAMPLE_RATE);
     uint32_t next_cycle = read_cpu_cycle_count();
 
     uint32_t t_start = esp_log_timestamp();
@@ -83,8 +82,8 @@ void vSample_task(void *args)
         }
 
         uint32_t raw_res = ((uint32_t)spi_t.rx_data[0] << 16) |
-                           ((uint32_t)spi_t.rx_data[1] <<  8) |
-                            (uint32_t)spi_t.rx_data[2];
+                           ((uint32_t)spi_t.rx_data[1] << 8) |
+                           (uint32_t)spi_t.rx_data[2];
         samples[i] = (raw_res >> 2) & 0xFFFF;
     }
     uint32_t t_end = esp_log_timestamp();
@@ -113,7 +112,7 @@ static void expand_mono16_to_stereo16(const uint8_t *mono_in,
     }
 }
 
-void vPlay_WAV_task(void* args)
+void vPlay_WAV_task(void *args)
 {
     configure_i2s_for_wav();
     if (mcu_tx == NULL) {
@@ -127,17 +126,15 @@ void vPlay_WAV_task(void* args)
     wave_header_t wav_head;
     const char *primary_wav = "/storage/44k_full_sweep.wav";
     const char *fallback_wav = "/storage/1khz_sine_44_1.wav";
-    bool using_fallback_mono = false;
 
     wav_hdl = wave_reader_open(primary_wav);
     if (wav_hdl == NULL) {
         ESP_LOGW(WAV_TAG, "Primary WAV missing, falling back to %s", fallback_wav);
         wav_hdl = wave_reader_open(fallback_wav);
-        using_fallback_mono = (wav_hdl != NULL);
     }
 
     if (wav_hdl == NULL) {
-        ESP_LOGE(WAV_TAG, "Unable to open read!");
+        ESP_LOGE(WAV_TAG, "Unable to open WAV file");
         wav_task_running = false;
         finish_play_test_if_done();
         vTaskDelete(NULL);
@@ -145,7 +142,7 @@ void vPlay_WAV_task(void* args)
     }
 
     if (wave_read_header(wav_hdl, &wav_head) != 0) {
-        ESP_LOGE(WAV_TAG, "Unable to read WAV file header!");
+        ESP_LOGE(WAV_TAG, "Unable to read WAV file header");
         wave_reader_close(wav_hdl);
         wav_hdl = NULL;
         wav_task_running = false;
@@ -154,15 +151,39 @@ void vPlay_WAV_task(void* args)
         return;
     }
 
-    // Preload the whole test file into PSRAM so playback does not compete with SPIFFS reads
-    // while sampling is active.
-    const size_t max_pcm_bytes = using_fallback_mono
-        ? ((size_t)SAMPLE_RATE * TEST_DURATION * BYTES_PER_SAMPLE)
-        : ((size_t)SAMPLE_RATE * TEST_DURATION * FRAME_SIZE_BYTES);
+    if (wav_head.bytes_per_sample != 2) {
+        ESP_LOGE(WAV_TAG, "Only 16-bit PCM WAV is supported");
+        wave_reader_close(wav_hdl);
+        wav_hdl = NULL;
+        wav_task_running = false;
+        finish_play_test_if_done();
+        vTaskDelete(NULL);
+        return;
+    }
 
-    uint8_t *preloaded_pcm = (uint8_t *)heap_caps_malloc(max_pcm_bytes, MALLOC_CAP_SPIRAM);
+    if (wav_head.n_channels != 1 && wav_head.n_channels != 2) {
+        ESP_LOGE(WAV_TAG, "Unsupported channel count: %u", wav_head.n_channels);
+        wave_reader_close(wav_hdl);
+        wav_hdl = NULL;
+        wav_task_running = false;
+        finish_play_test_if_done();
+        vTaskDelete(NULL);
+        return;
+    }
+
+    const bool input_is_mono = (wav_head.n_channels == 1);
+    const size_t in_frame_bytes =
+        (size_t)wav_head.bytes_per_sample * (size_t)wav_head.n_channels;
+
+    const size_t max_frames_to_play =
+        std::min<size_t>((size_t)wav_head.samples_per_channel,
+                         (size_t)wav_head.sample_rate * TEST_DURATION);
+
+    const size_t max_input_bytes = max_frames_to_play * in_frame_bytes;
+
+    uint8_t *preloaded_pcm = (uint8_t *)heap_caps_malloc(max_input_bytes, MALLOC_CAP_SPIRAM);
     if (preloaded_pcm == NULL) {
-        preloaded_pcm = (uint8_t *)calloc(1, max_pcm_bytes);
+        preloaded_pcm = (uint8_t *)calloc(1, max_input_bytes);
     }
     if (preloaded_pcm == NULL) {
         ESP_LOGE(WAV_TAG, "Failed to allocate preload buffer");
@@ -175,9 +196,9 @@ void vPlay_WAV_task(void* args)
     }
 
     size_t preload_pos = 0;
-    const size_t preload_chunk = using_fallback_mono ? (BUFFER_BYTES / 2) : BUFFER_BYTES;
-    while (preload_pos < max_pcm_bytes) {
-        const size_t request = std::min(preload_chunk, max_pcm_bytes - preload_pos);
+    const size_t preload_chunk = input_is_mono ? (BUFFER_BYTES / 2) : BUFFER_BYTES;
+    while (preload_pos < max_input_bytes) {
+        const size_t request = std::min(preload_chunk, max_input_bytes - preload_pos);
         size_t bytes_read = wave_read_raw_data(wav_hdl, preloaded_pcm + preload_pos, preload_pos, request);
         if (bytes_read == 0) {
             break;
@@ -200,9 +221,11 @@ void vPlay_WAV_task(void* args)
         return;
     }
 
-    const size_t mono_chunk_bytes = BUFFER_BYTES / 2;
-    uint8_t *out_buff = using_fallback_mono ? (uint8_t *)calloc(1, BUFFER_BYTES) : NULL;
-    if (using_fallback_mono && out_buff == NULL) {
+    preload_pos -= (preload_pos % in_frame_bytes);
+    const size_t frames_loaded = preload_pos / in_frame_bytes;
+
+    uint8_t *out_buff = input_is_mono ? (uint8_t *)calloc(1, BUFFER_BYTES) : NULL;
+    if (input_is_mono && out_buff == NULL) {
         ESP_LOGE(WAV_TAG, "Failed to allocate mono expansion buffer");
         free(preloaded_pcm);
         wav_task_running = false;
@@ -211,16 +234,18 @@ void vPlay_WAV_task(void* args)
         return;
     }
 
-    ESP_LOGI(WAV_TAG, "Starting WAV playback%s from preloaded buffer (%u bytes)",
-             using_fallback_mono ? " with mono-to-stereo expansion" : "",
-             (unsigned)preload_pos);
+    ESP_LOGI(WAV_TAG,
+             "Starting WAV playback%s from preloaded buffer (%u frames, %u Hz, %u channels)",
+             input_is_mono ? " with mono-to-stereo expansion" : "",
+             (unsigned)frames_loaded,
+             (unsigned)wav_head.sample_rate,
+             (unsigned)wav_head.n_channels);
 
     xEventGroupSync(
         sync_tasks,
         TASK_B_READY_BIT,
         ALL_TASKS_READY,
-        portMAX_DELAY
-    );
+        portMAX_DELAY);
 
     esp_err_t enable_tx_err = i2s_channel_enable(mcu_tx);
     if (enable_tx_err != ESP_OK) {
@@ -251,35 +276,36 @@ void vPlay_WAV_task(void* args)
         }
     }
 
-    const uint32_t PLAY_DURATION_MS = 5000;
-    uint32_t t_start = esp_log_timestamp();
-    size_t pos = 0;
-
-    while ((esp_log_timestamp() - t_start) < PLAY_DURATION_MS && pos < preload_pos)
-    {
+    size_t frame_pos = 0;
+    while (frame_pos < frames_loaded) {
         const uint8_t *write_ptr = NULL;
         size_t bytes_to_write = 0;
 
-        if (using_fallback_mono) {
-            const size_t mono_remaining = preload_pos - pos;
-            const size_t mono_take = std::min(mono_chunk_bytes, mono_remaining);
-            expand_mono16_to_stereo16(preloaded_pcm + pos, mono_take, out_buff);
+        if (input_is_mono) {
+            const size_t frames_remaining = frames_loaded - frame_pos;
+            const size_t frames_take = std::min((size_t)(BUFFER_BYTES / FRAME_SIZE_BYTES), frames_remaining);
+            const size_t mono_take_bytes = frames_take * sizeof(int16_t);
+
+            expand_mono16_to_stereo16(
+                preloaded_pcm + (frame_pos * sizeof(int16_t)),
+                mono_take_bytes,
+                out_buff);
+
             write_ptr = out_buff;
-            bytes_to_write = mono_take * 2;
-            pos += mono_take;
+            bytes_to_write = frames_take * FRAME_SIZE_BYTES;
+            frame_pos += frames_take;
         } else {
-            const size_t stereo_remaining = preload_pos - pos;
-            bytes_to_write = std::min((size_t)BUFFER_BYTES, stereo_remaining);
-            write_ptr = preloaded_pcm + pos;
-            pos += bytes_to_write;
+            const size_t frames_remaining = frames_loaded - frame_pos;
+            const size_t frames_take = std::min((size_t)(BUFFER_BYTES / FRAME_SIZE_BYTES), frames_remaining);
+
+            write_ptr = preloaded_pcm + (frame_pos * FRAME_SIZE_BYTES);
+            bytes_to_write = frames_take * FRAME_SIZE_BYTES;
+            frame_pos += frames_take;
         }
 
         while (bytes_to_write > 0) {
             size_t wrote = 0;
-            uint32_t elapsed = esp_log_timestamp() - t_start;
-            uint32_t remaining = (elapsed < PLAY_DURATION_MS) ? (PLAY_DURATION_MS - elapsed) : 0;
-
-            esp_err_t r = i2s_channel_write(mcu_tx, write_ptr, bytes_to_write, &wrote, pdMS_TO_TICKS(remaining));
+            esp_err_t r = i2s_channel_write(mcu_tx, write_ptr, bytes_to_write, &wrote, portMAX_DELAY);
             if (r != ESP_OK) {
                 ESP_LOGE(WAV_TAG, "i2s_channel_write failed: %s", esp_err_to_name(r));
                 bytes_to_write = 0;
