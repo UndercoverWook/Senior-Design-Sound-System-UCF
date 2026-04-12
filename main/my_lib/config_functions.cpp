@@ -10,6 +10,8 @@
  */
 
 #include "config_functions.h"
+#include "soc/io_mux_reg.h"
+#include "soc/gpio_reg.h"
 
 void configure_spi() 
 {
@@ -58,7 +60,7 @@ void configure_i2s_for_wav()
 	chan_cfg.dma_desc_num = 16;
 	chan_cfg.dma_frame_num = 512;
 
-    err = i2s_new_channel(&chan_cfg, &mcu_tx, &mcu_rx);
+    err = i2s_new_channel(&chan_cfg, &mcu_tx, NULL);
 	
 	if (err != ESP_OK) {
 		ESP_LOGE(I2S_TAG, "Unable to initialize I2S channel, ERROR: %s", esp_err_to_name(err));
@@ -82,16 +84,22 @@ void configure_i2s_for_wav()
     };
 
 	// Initialize standard sender channel only
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &std_cfg));
+    //ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &std_cfg));
 }
 
-void configure_i2s_for_audio()
+void configure_i2s_for_audio(bool bluetooth)
 {
 	esp_err_t err;
 	i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-
-	err = i2s_new_channel(&chan_cfg, &mcu_tx, &mcu_rx);
+	chan_cfg.dma_desc_num = 16;
+	chan_cfg.dma_frame_num = 512;
+	
+    if (bluetooth){
+        err = i2s_new_channel(&chan_cfg, &mcu_tx, &mcu_rx);
+    } else {
+	    err = i2s_new_channel(&chan_cfg, &mcu_tx, NULL);
+    }
 	
 	if (err != ESP_OK) {
 		ESP_LOGE(I2S_TAG, "Unable to initialize I2S channel, ERROR: %s", esp_err_to_name(err));
@@ -99,29 +107,45 @@ void configure_i2s_for_audio()
 	}
 	
 	i2s_std_clk_config_t clk_config = I2S_STD_CLK_DEFAULT_CONFIG(48000);
-	clk_config.clk_src = I2S_CLK_SRC_PLL_160M;
+	clk_config.clk_src = I2S_CLK_SRC_DEFAULT;
 	clk_config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
-	i2s_std_config_t std_cfg = {
-		.clk_cfg = clk_config,
-		.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
-		.gpio_cfg = {
-			.mclk = I2S_GPIO_UNUSED,
-			.bclk = I2S_BIT_CLK,
-			.ws   = I2S_LRCLK_PIN,
-			.dout = I2S_TX_LINE,
-			.din  = I2S_RX_LINE,
-		},
-	};
+	i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
 
-	// Initialize standard sender channel only
-	ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &std_cfg));
-	ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &std_cfg));
+	// 2. CONFIG FOR TX (Output to DAC)
+    i2s_std_config_t tx_std_cfg = {
+        .clk_cfg = clk_config,
+        .slot_cfg = slot_cfg,
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = I2S_BIT_CLK,
+            .ws   = I2S_LRCLK_PIN,
+            .dout = I2S_TX_LINE,
+            .din  = I2S_GPIO_UNUSED,
+        },
+    };
 
-	gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
-	esp_rom_gpio_connect_out_signal(GPIO_NUM_2, 0x100, false, false);
-	//gpio_set_drive_capability(GPIO_NUM_21, GPIO_DRIVE_CAP_1); // BCLK
-	//gpio_set_drive_capability(GPIO_NUM_11, GPIO_DRIVE_CAP_1); // WS
+    i2s_std_config_t rx_std_cfg = {
+        .clk_cfg = clk_config,
+        .slot_cfg = slot_cfg,
+        .gpio_cfg = {
+            .mclk = I2S_GPIO_UNUSED,
+            .bclk = I2S_BIT_CLK,
+            .ws   = I2S_LRCLK_PIN,
+            .dout = I2S_GPIO_UNUSED, 
+            .din  = I2S_RX_LINE,
+        },
+    };
+
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &tx_std_cfg));
+    if (bluetooth) {
+        ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &rx_std_cfg));
+        gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
+        esp_rom_gpio_connect_out_signal(GPIO_NUM_2, 0x100, false, false);
+        esp_rom_gpio_connect_in_signal(GPIO_NUM_2, 25, false);
+        gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0); // Lowest drive
+        gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
+    }
 }
 
 void configure_spiffs()

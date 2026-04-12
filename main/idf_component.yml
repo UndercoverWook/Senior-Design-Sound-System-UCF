@@ -16,4 +16,5 @@ dependencies:
   #   public: true
   espressif/esp-dsp: ^1.7.1
   mateusglucas/wave: ^1.0.1
-  espressif/usb_device_uac: ^1.2.3
+  espressif/tinyusb: ^0.17.0~2
+  espressif/usb_device_uac: ^1.2.1

@@ -16,7 +16,7 @@ void configure_spi();
 void configure_i2s_for_wav();
 
 // Configure I2S protocol for audio streaming (BM83 or USB Audio)
-void configure_i2s_for_audio();
+void configure_i2s_for_audio(bool bluetooth);
 
 // Configure SPIFFS File System
 void configure_spiffs();

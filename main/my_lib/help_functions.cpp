@@ -104,12 +104,10 @@ void wav_to_fft()
     if (mag == NULL) {
         ESP_LOGI(WAV_TAG, "No cache found, running full FFT pipeline...");
 
-        ESP_ERROR_CHECK(dsps_fft2r_init_fc32(NULL, FFT_SIZE));
-
         uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
         int count = load_wav_to_array("/storage/44k_full_sweep.wav", samples, N_SAMPLES);
 
-        mag = compute_fft(samples, count, 44100.0f, false);
+        mag = compute_fft(samples, count, SAMPLE_RATE);
 
         free(samples);
         dsps_fft2r_deinit_fc32();
