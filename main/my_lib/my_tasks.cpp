@@ -43,7 +43,7 @@ void vSample_task(void *args)
     float actual_fs = (float)N_SAMPLES / ((t_end - t_start) / 1000.0f);
 	ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
 
-    //run_Auto_EQ_Algorithm(samples, actual_fs);
+    float* fir_taps = run_Auto_EQ_algorithm(samples, actual_fs);
 
     vTaskDelete(NULL);  // Delete the task when done
 }
@@ -71,12 +71,12 @@ void vPlay_WAV_task(void* args)
 	
 	i2s_channel_enable(mcu_tx);	// Enable I2S channel for transmission
 
-	// xEventGroupSync(
-    //     sync_tasks,
-    //     TASK_B_READY_BIT,
-    //     ALL_TASKS_READY,
-    //     portMAX_DELAY
-    // );
+	xEventGroupSync(
+        sync_tasks,
+        TASK_B_READY_BIT,
+        ALL_TASKS_READY,
+        portMAX_DELAY
+    );
 
 	uint32_t t_start = esp_log_timestamp();
 	while (1)
@@ -123,6 +123,10 @@ void vPlay_WAV_task(void* args)
 
 void vUSB_playback_task(void *arg)
 {
+	configure_i2s_for_audio(false);	// Set bluetooth == false 
+    i2s_channel_enable(mcu_tx);		// Enable I2S channel for transmission
+    usb_uac_device_init();			// Initialize USB UAC device class
+
     while (1) {
         size_t bytes_received = 0;
         uint8_t *data = (uint8_t *)xRingbufferReceiveUpTo(audio_ringbuf, &bytes_received, portMAX_DELAY, 192);
@@ -168,11 +172,33 @@ void vBT_playback_task(void *arg)
 		.intr_type = GPIO_INTR_DISABLE,
 	};
 	gpio_config(&io_conf);
+
+	int num_samples = BUFFER_BYTES / 2; 
+	float *float_conv_buff = (float *)heap_caps_malloc(num_samples * sizeof(float), MALLOC_CAP_INTERNAL);
 		
 	// Read bytes from the Bluetooth Module (MCU acts as Receiver) and echo/send it to the DAC (MCU acts as Sender)
 	while (1)
 	{
 		esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);
+
+		// Process 16-bit data to float for FIR processing (convert back to 16-bit for DAC)
+		if (activate_eq &&bytes_read > 0) {
+			int16_t *raw_samples = (int16_t *)bt_buff;
+			int sample_count = bytes_read / 2;
+
+			for (int i = 0; i < sample_count; i++) {
+				float_conv_buff[i] = (raw_samples[i] / 32768.0f) * 0.25f;
+			}
+
+			dsps_fir_f32_aes3(&global_eq, float_conv_buff, float_conv_buff, sample_count);
+
+			for (int i = 0; i < sample_count; i++) {
+				float val = float_conv_buff[i] * 32768.0f;
+				if (val > 32767.0f) val = 32767.0f;
+				if (val < -32768.0f) val = -32768.0f;
+				raw_samples[i] = (int16_t)val;
+			}
+		}
 		
 		size_t bytes_to_w = bytes_read;
 		uint8_t *p = bt_buff;

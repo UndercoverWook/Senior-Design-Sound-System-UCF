@@ -194,8 +194,9 @@ void apply_calibration_to_fft(float *fft_acc, float sample_rate)
 
 float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
 { 
+    // Allocate buffers for FFT processing and preprocessing
     float *y_cf       = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float) * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
-    float *wind_coeff = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_8BIT);
+    float *wind_coeff = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float),     MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     float *fft_acc    = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float) * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
 
     if (!y_cf || !wind_coeff || !fft_acc) {
@@ -207,6 +208,7 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
     // Zero-init the accumulator (complex, so FFT_SIZE * 2)
     memset(fft_acc, 0, FFT_SIZE * sizeof(float) * 2);
 
+    // Get Hann window coefficients
     dsps_wind_hann_f32(wind_coeff, FFT_SIZE);
 
     int hop        = NUM_BINS;
@@ -215,12 +217,12 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
     for (int i = 0; i < num_chunks; i++) {
         uint16_t *chunk_start = samples + i * hop;
 
-        // Normalize results or real signal (no Im part)
         for (int j = 0; j < FFT_SIZE; j++) {
-            y_cf[j*2 + 0] = ((chunk_start[j] - 32768.0f) / 32768.0f) * wind_coeff[j];
-            y_cf[j*2 + 1] = 0.0f;
+            y_cf[j*2 + 0] = ((chunk_start[j] - 32768.0f) / 32768.0f) * wind_coeff[j]; // Normalize for 16-bit (1.5V bias)
+            y_cf[j*2 + 1] = 0.0f;                                                     // Real signal so imaginary part is zero
         }
 
+        // Take FFT and bit reverse the result (required for ESP-DSP lib)
         dsps_fft2r_fc32_aes3(y_cf, FFT_SIZE);
         dsps_bit_rev_fc32(y_cf, FFT_SIZE);
 
@@ -230,6 +232,8 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
             fft_acc[k*2 + 1] += y_cf[k*2 + 1];  // imaginary
         }
     }
+    
+    free(samples);
 
     // Average across all chunks
     if (num_chunks > 0) {
@@ -261,7 +265,7 @@ void normalize_taps(float* taps)
     }
 }
 
-void run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq) 
+float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq) 
 {   
     // Initialize FFT tables (must be done before calling any FFT functions) and compute FFT
     esp_err_t err = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
@@ -308,4 +312,6 @@ void run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     
     // Normalize final taps for FIR design
     normalize_taps(final_taps);
+
+    return final_taps;
 }

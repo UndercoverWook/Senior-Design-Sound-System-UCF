@@ -34,6 +34,9 @@ float* load_fft_cache(int num_bins);
 // Load FFT magnitudes, or if not cached, compute them from the WAV file and cache the results
 void wav_to_fft();
 
+// Perform Phase 1 of the algorithm by creating a Sampling task and a Test Signal Playback task
+void play_and_sample();
+
 #ifdef __cplusplus
 }
 #endif

@@ -101,10 +101,12 @@ extern TaskHandle_t 		task1_hdl;		// Task 1 handle
 extern TaskHandle_t 		task2_hdl;		// Task 2 handle
 extern RingbufHandle_t 	    audio_ringbuf;	// Ring buffer handle for audio data between USB and I2S tasks
 extern EventGroupHandle_t   sync_tasks;     // Synchronization mechanism for concurrent tasks
+extern fir_f32_s            global_eq;
 
 // Function helpers:
 extern float cal_values [256][2];			// To store calibration values as a pair of values in a 2D array fashion
 static const uint32_t STACK_DEPTH = 4096;	// Stack allocation for FreeRTOS Tasks
+extern bool activate_eq;                    // Global flag to indicate whether to apply EQ or not 
 
 // TAGS:
 extern const char *STORAGE_TAG;
@@ -117,6 +119,7 @@ extern const char *TONE_TAG;
 extern const char *WAV_TAG;
 extern const char *EQ_TAG;
 extern const char *BM83_TAG;
+
 
 #ifdef __cplusplus
 }

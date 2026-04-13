@@ -12,7 +12,7 @@ extern "C" {
 void show_FFT(float *y_cf, int n, float sample_rate);
 
 // Function to run the AutoEQ algorithm on the sampled data
-void run_Auto_EQ_algorithm(uint16_t* samples, float *actual_freq);
+float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq);
 
 // Function to compute the FFT and print the calibrated magnitude values
 float* compute_fft(uint16_t *samples, int num_samples, float sample_rate);

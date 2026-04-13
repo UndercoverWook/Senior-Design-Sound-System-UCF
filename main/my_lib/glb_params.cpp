@@ -19,6 +19,7 @@ RingbufHandle_t      audio_ringbuf = NULL;
 EventGroupHandle_t   sync_tasks    = NULL;
 
 float cal_values[256][2]    = {};
+bool activate_eq = false;
 
 const char *STORAGE_TAG  = "File System";
 const char *SPI_TAG      = "SPI Configuration";

@@ -8,6 +8,7 @@
 #include "help_functions.h"
 #include "glb_params.h"
 #include "auto_eq_help.h"
+#include "my_tasks.h"
 #include <math.h>
 
 void bm83_tx_ind_init(void) {
@@ -117,4 +118,11 @@ void wav_to_fft()
         ESP_LOGI(WAV_TAG, "Loaded FFT results from cache, skipping pipeline");
     }
     free(mag);
+}
+
+void play_and_sample()
+{
+    sync_tasks = xEventGroupCreate();
+    xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE0);
+    xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
 }
