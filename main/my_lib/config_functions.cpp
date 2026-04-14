@@ -4,8 +4,12 @@
  * Fixed coexistence version:
  * - WAV / app playback stays on I2S0 using mcu_tx / mcu_rx
  * - BM83 streaming uses dedicated audio_tx / audio_rx on I2S1
- * - teammate's BM83 pin map and format are preserved
+ * - teammate's BM83 pin map and audio format are preserved
  * - histogram-safe GPTimer init order is preserved
+ * - only safe BM83 clock-drive tuning stays here
+ * - low-level esp_rom GPIO matrix overrides are intentionally NOT used here
+ *   because BM83 now runs on I2S1, and the hard-coded override path was from
+ *   the older I2S0-based teammate implementation
  */
 
 #include "config_functions.h"
@@ -107,9 +111,12 @@ void configure_i2s_for_audio()
     }
 
     /*
-     * BM83 streaming must not fight the WAV path for the same I2S controller.
-     * Keep the teammate's proven BM83 pin map and format, but place the BM83
-     * bridge on I2S1 using dedicated audio handles.
+     * BM83 streaming coexists with the WAV/test-tone path by using I2S1.
+     * Pin map and format match the teammate's known-good BM83 path:
+     *   TX  = GPIO 14
+     *   RX  = GPIO 2
+     *   BCK = GPIO 21
+     *   WS  = GPIO 11
      */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = 16;
@@ -159,7 +166,9 @@ void configure_i2s_for_audio()
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(audio_tx, &tx_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(audio_rx, &rx_std_cfg));
 
-
+    /* Safe teammate tuning: clock-drive strength only */
+    gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
 
     ESP_LOGI(I2S_TAG,
              "BM83 I2S configured on I2S1: TX=%d RX=%d BCLK=%d WS=%d",

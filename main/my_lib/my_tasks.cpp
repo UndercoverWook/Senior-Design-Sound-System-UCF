@@ -355,8 +355,17 @@ void vBT_playback_task(void *arg)
 
     bm83_tx_ind_init();
     ESP_LOGI(BM83_TAG, "BM83 playback task started");
-    ESP_LOGI(BM83_TAG, "Configuring BM83 audio bridge immediately...");
+    ESP_LOGI(BM83_TAG, "Waiting for BM83 audio indication on MCU_WAKE...");
 
+    while (1) {
+        int level = gpio_get_level(MCU_WAKE);
+        if (level == 0) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    ESP_LOGI(BM83_TAG, "BM83 paired/active. Initializing audio bridge...");
     configure_i2s_for_audio();
     if (audio_tx == NULL || audio_rx == NULL) {
         ESP_LOGE(I2S_TAG, "BM83 audio handles not available after configure_i2s_for_audio()");
@@ -372,6 +381,7 @@ void vBT_playback_task(void *arg)
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io_conf);
+    ESP_LOGI(BM83_TAG, "BM83 RX pin prepared on GPIO %d", (int)I2S_RX_LINE);
 
     bool bridge_enabled = false;
     bool seen_nonzero_audio = false;
@@ -383,17 +393,9 @@ void vBT_playback_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-        /* teammate path */
-    esp_rom_gpio_connect_out_signal(I2S_RX_LINE, 0x100, false, false);
-    esp_rom_gpio_connect_in_signal(I2S_RX_LINE, 25, false);
-    gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0);
-    gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
+
     while (1)
     {
-        /*
-         * WAV playback owns the DAC path while the play test runs.
-         * Pause the BM83 bridge, then resume it automatically afterward.
-         */
         if (play_test_running) {
             if (bridge_enabled) {
                 i2s_channel_disable(audio_tx);
