@@ -18,11 +18,8 @@ static inline uint32_t read_cpu_cycle_count()
 /*
  * Synchronization between the BM83 bridge task and the app-triggered WAV task.
  *
- * The root problem is that both paths use the same physical BCLK / WS / DOUT /
- * DIN pins. The BM83 bridge must fully release those pins before the WAV task
- * configures I2S0, and it must fully reclaim them after the WAV path finishes.
- *
- * These flags are intentionally file-local because only my_tasks.cpp needs them.
+ * The BM83 bridge must fully release the shared audio pins before the WAV task
+ * takes over, and must then reclaim them afterward.
  */
 static volatile bool s_bm83_pause_request = false;
 static volatile bool s_bm83_is_paused = false;
@@ -151,12 +148,6 @@ static void expand_mono16_to_stereo16(const uint8_t *mono_in,
 
 void vPlay_WAV_task(void *args)
 {
-    /*
-     * Crucial ordering fix:
-     * Release the BM83 bridge BEFORE configuring the WAV path.
-     * The prior log showed GPIO conflict warnings because WAV configured I2S0
-     * first and only afterward did the BM83 task notice play_test_running.
-     */
     request_bm83_release_for_wav();
 
     configure_i2s_for_wav();
@@ -291,19 +282,6 @@ void vPlay_WAV_task(void *args)
         return;
     }
 
-    if (mcu_rx != NULL) {
-        esp_err_t enable_rx_err = i2s_channel_enable(mcu_rx);
-        if (enable_rx_err != ESP_OK) {
-            ESP_LOGE(WAV_TAG, "Failed to enable I2S RX channel: %s", esp_err_to_name(enable_rx_err));
-            i2s_channel_disable(mcu_tx);
-            free(preloaded_pcm);
-            wav_task_running = false;
-            finish_play_test_if_done();
-            vTaskDelete(NULL);
-            return;
-        }
-    }
-
     size_t frame_pos = 0;
     while (frame_pos < frames_loaded) {
         const uint8_t *write_ptr = NULL;
@@ -350,14 +328,10 @@ void vPlay_WAV_task(void *args)
         }
     }
 
-    if (mcu_rx != NULL) {
-        i2s_channel_disable(mcu_rx);
-        i2s_del_channel(mcu_rx);
-        mcu_rx = NULL;
-    }
     i2s_channel_disable(mcu_tx);
     i2s_del_channel(mcu_tx);
     mcu_tx = NULL;
+    mcu_rx = NULL;
 
     free(preloaded_pcm);
 
@@ -418,6 +392,7 @@ void vBT_playback_task(void *arg)
     bool bridge_enabled = false;
     bool bridge_needs_reconfigure = true;
     bool seen_nonzero_audio = false;
+    bool tx_enabled = false;
     int consecutive_zero_buffers = 0;
 
     uint8_t *bt_buff = (uint8_t *)calloc(1, BUFFER_BYTES);
@@ -431,8 +406,12 @@ void vBT_playback_task(void *arg)
     {
         if (s_bm83_pause_request || play_test_running) {
             if (bridge_enabled) {
-                i2s_channel_disable(audio_tx);
+                if (tx_enabled) {
+                    i2s_channel_disable(audio_tx);
+                    tx_enabled = false;
+                }
                 i2s_channel_disable(audio_rx);
+
                 i2s_del_channel(audio_tx);
                 i2s_del_channel(audio_rx);
                 audio_tx = NULL;
@@ -472,8 +451,9 @@ void vBT_playback_task(void *arg)
             gpio_config(&io_conf);
             ESP_LOGI(BM83_TAG, "BM83 RX pin prepared on GPIO %d", (int)I2S_RX_LINE);
 
-            ESP_ERROR_CHECK(i2s_channel_enable(audio_tx));
             ESP_ERROR_CHECK(i2s_channel_enable(audio_rx));
+            ESP_ERROR_CHECK(i2s_channel_enable(audio_tx));
+            tx_enabled = true;
             bridge_enabled = true;
             bridge_needs_reconfigure = false;
             s_bm83_is_paused = false;
@@ -509,10 +489,24 @@ void vBT_playback_task(void *arg)
             if ((consecutive_zero_buffers % 25) == 0) {
                 ESP_LOGW(BM83_TAG, "BM83 received %d consecutive all-zero buffers", consecutive_zero_buffers);
             }
+
+            if (tx_enabled && consecutive_zero_buffers >= 8) {
+                i2s_channel_disable(audio_tx);
+                tx_enabled = false;
+                seen_nonzero_audio = false;
+                ESP_LOGI(BM83_TAG, "BM83 TX disabled due to prolonged zero-data stream");
+            }
+
             continue;
         }
 
         consecutive_zero_buffers = 0;
+
+        if (!tx_enabled) {
+            ESP_ERROR_CHECK(i2s_channel_enable(audio_tx));
+            tx_enabled = true;
+            ESP_LOGI(BM83_TAG, "BM83 TX re-enabled after audio resumed");
+        }
 
         if (!seen_nonzero_audio) {
             ESP_LOGI(BM83_TAG, "BM83 non-zero audio stream detected (%u bytes)", (unsigned)bytes_read);
@@ -546,7 +540,9 @@ void vBT_playback_task(void *arg)
     free(bt_buff);
 
     if (bridge_enabled) {
-        i2s_channel_disable(audio_tx);
+        if (tx_enabled) {
+            i2s_channel_disable(audio_tx);
+        }
         i2s_channel_disable(audio_rx);
         i2s_del_channel(audio_tx);
         i2s_del_channel(audio_rx);
