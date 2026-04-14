@@ -1,15 +1,14 @@
 /*
  * config_functions.cpp
  *
- * Fixed coexistence version:
- * - WAV / app playback stays on I2S0 using mcu_tx / mcu_rx
- * - BM83 streaming uses dedicated audio_tx / audio_rx on I2S1
- * - teammate's BM83 pin map and audio format are preserved
+ * Shared-I2S0 fix:
+ * - WAV / app playback uses I2S0
+ * - BM83 streaming ALSO uses I2S0, but only after the BM83 bridge has fully
+ *   released the controller and pins
+ * - this avoids alternating between I2S0 and I2S1 on the exact same physical
+ *   pins, which was likely causing the repeated / weird-looking waveforms
+ * - teammate BM83 pin map and 16-bit stereo Philips format are preserved
  * - histogram-safe GPTimer init order is preserved
- * - only safe BM83 clock-drive tuning stays here
- * - low-level esp_rom GPIO matrix overrides are intentionally NOT used here
- *   because BM83 now runs on I2S1, and the hard-coded override path was from
- *   the older I2S0-based teammate implementation
  */
 
 #include "config_functions.h"
@@ -62,15 +61,19 @@ void configure_i2s_for_wav()
 {
     esp_err_t err;
 
-    if (mcu_tx != NULL && mcu_rx != NULL) {
+    if (mcu_tx != NULL || mcu_rx != NULL) {
         return;
     }
 
+    /*
+     * WAV playback only needs TX. Keeping this path TX-only makes the app
+     * playback cleaner and avoids extra unnecessary routing on the shared pins.
+     */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = 16;
     chan_cfg.dma_frame_num = 512;
 
-    err = i2s_new_channel(&chan_cfg, &mcu_tx, &mcu_rx);
+    err = i2s_new_channel(&chan_cfg, &mcu_tx, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(I2S_TAG, "Unable to initialize WAV I2S channel, ERROR: %s", esp_err_to_name(err));
         mcu_tx = NULL;
@@ -81,7 +84,7 @@ void configure_i2s_for_wav()
     i2s_std_clk_config_t clk_config = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE);
     clk_config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
-    i2s_std_config_t std_cfg = {
+    i2s_std_config_t tx_cfg = {
         .clk_cfg = clk_config,
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
@@ -89,16 +92,17 @@ void configure_i2s_for_wav()
             .bclk = I2S_BIT_CLK,
             .ws   = I2S_LRCLK_PIN,
             .dout = I2S_TX_LINE,
-            .din  = I2S_RX_LINE,
+            .din  = I2S_GPIO_UNUSED,
             .invert_flags = {.ws_inv = false},
         },
     };
 
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &std_cfg));
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &std_cfg));
+    ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &tx_cfg));
 
-    ESP_LOGI(I2S_TAG, "WAV I2S configured on I2S0: TX=%d RX=%d BCLK=%d WS=%d",
-             (int)I2S_TX_LINE, (int)I2S_RX_LINE, (int)I2S_BIT_CLK, (int)I2S_LRCLK_PIN);
+    mcu_rx = NULL;
+
+    ESP_LOGI(I2S_TAG, "WAV I2S configured on shared I2S0: TX=%d BCLK=%d WS=%d",
+             (int)I2S_TX_LINE, (int)I2S_BIT_CLK, (int)I2S_LRCLK_PIN);
 }
 
 void configure_i2s_for_audio()
@@ -111,14 +115,12 @@ void configure_i2s_for_audio()
     }
 
     /*
-     * BM83 streaming coexists with the WAV/test-tone path by using I2S1.
-     * Pin map and format match the teammate's known-good BM83 path:
-     *   TX  = GPIO 14
-     *   RX  = GPIO 2
-     *   BCK = GPIO 21
-     *   WS  = GPIO 11
+     * Use the SAME I2S controller as WAV playback, but only after the BM83
+     * bridge has fully released / reclaimed the path. This matches the older
+     * single-path behavior more closely and avoids driving the same physical
+     * pins from two different I2S controllers.
      */
-    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.dma_desc_num = 16;
     chan_cfg.dma_frame_num = 512;
 
@@ -166,12 +168,11 @@ void configure_i2s_for_audio()
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(audio_tx, &tx_std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(audio_rx, &rx_std_cfg));
 
-    /* Safe teammate tuning: clock-drive strength only */
     gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
 
     ESP_LOGI(I2S_TAG,
-             "BM83 I2S configured on I2S1: TX=%d RX=%d BCLK=%d WS=%d",
+             "BM83 I2S configured on shared I2S0: TX=%d RX=%d BCLK=%d WS=%d",
              (int)I2S_TX_LINE,
              (int)I2S_RX_LINE,
              (int)I2S_BIT_CLK,
