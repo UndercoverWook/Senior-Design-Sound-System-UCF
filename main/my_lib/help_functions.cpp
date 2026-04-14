@@ -59,16 +59,50 @@ void emm6_file_to_arr()
 	return;
 }// end of file_to_arr function
 
-void save_fft_cache(float* mag, int num_bins)
+
+int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
 {
-    FILE* f = fopen(FFT_CACHE_PATH, "wb");
-    if (f == NULL) {
-        ESP_LOGE(WAV_TAG, "Failed to open cache file for writing");
-        return;
+    wav_hdl = wave_reader_open(filename);
+
+    if (wav_hdl == NULL) {
+        ESP_LOGE(WAV_TAG, "Unable to open file: %s", filename);
+        return -1;
     }
-    fwrite(mag, sizeof(float), num_bins, f);
-    fclose(f);
-    ESP_LOGI(WAV_TAG, "FFT cache saved (%d bins)", num_bins);
+
+    uint8_t* buff = (uint8_t*)calloc(1, BUFFER_BYTES);
+    if (buff == NULL) {
+        ESP_LOGE(WAV_TAG, "Failed to allocate buffer");
+        wave_reader_close(wav_hdl);
+        return -1;
+    }
+
+    size_t pos = 0;
+    int sample_count = 0;
+
+    while (sample_count < max_samples)
+    {
+        size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);
+
+        if (bytes_read == 0) {
+            break;  // End of file
+        }
+
+        pos += bytes_read;
+
+        // Reinterpret the raw bytes as 16-bit samples.
+        // Each uint16_t sample = 2 bytes, so iterate in steps of 2.
+        for (size_t i = 0; i + 1 < bytes_read && sample_count < max_samples; i += 2)
+        {
+            // Little-endian: low byte first, high byte second (standard WAV format)
+            samples[sample_count++] = (uint16_t)(buff[i] | (buff[i + 1] << 8));
+        }
+    }
+
+    wave_reader_close(wav_hdl);
+    free(buff);
+
+    ESP_LOGI(WAV_TAG, "Loaded %d samples from %s", sample_count, filename);
+    return sample_count;  // Return the number of samples actually read
 }
 
 float* load_fft_cache(int num_bins)
@@ -98,26 +132,15 @@ float* load_fft_cache(int num_bins)
     return mag;
 }
 
-void wav_to_fft()
+float* wav_to_fft()
 {
-	float* mag = load_fft_cache(NUM_BINS);
+    uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    int count = load_wav_to_array("/storage/stereo_sweep.wav", samples, N_SAMPLES);
 
-    if (mag == NULL) {
-        ESP_LOGI(WAV_TAG, "No cache found, running full FFT pipeline...");
+    float* wav_fft = compute_fft(samples, count, SAMPLE_RATE);
+    free(samples);
 
-        uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-        int count = load_wav_to_array("/storage/44k_full_sweep.wav", samples, N_SAMPLES);
-
-        mag = compute_fft(samples, count, SAMPLE_RATE);
-
-        free(samples);
-        dsps_fft2r_deinit_fc32();
-
-        save_fft_cache(mag, NUM_BINS);
-    } else {
-        ESP_LOGI(WAV_TAG, "Loaded FFT results from cache, skipping pipeline");
-    }
-    free(mag);
+    return wav_fft;
 }
 
 void play_and_sample()

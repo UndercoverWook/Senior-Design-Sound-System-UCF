@@ -97,8 +97,8 @@ extern spi_device_handle_t 	spi_hdl;		// SPI handle for ADC transmission
 extern i2s_chan_handle_t 	mcu_tx;			// I2S Transmitting channel handle (send to DAC)
 extern i2s_chan_handle_t 	mcu_rx;			// I2S Receiving channel handle (receive from BM83)
 extern wave_reader_handle_t wav_hdl;		// Wav file handle
-extern TaskHandle_t 		task1_hdl;		// Task 1 handle
-extern TaskHandle_t 		task2_hdl;		// Task 2 handle
+extern TaskHandle_t 		bt_task;		// Task 1 handle
+extern TaskHandle_t 		usb_task;		// Task 2 handle
 extern RingbufHandle_t 	    audio_ringbuf;	// Ring buffer handle for audio data between USB and I2S tasks
 extern EventGroupHandle_t   sync_tasks;     // Synchronization mechanism for concurrent tasks
 extern fir_f32_s            global_eq;
@@ -119,6 +119,7 @@ extern const char *TONE_TAG;
 extern const char *WAV_TAG;
 extern const char *EQ_TAG;
 extern const char *BM83_TAG;
+extern const char *USB_TAG;
 
 
 #ifdef __cplusplus

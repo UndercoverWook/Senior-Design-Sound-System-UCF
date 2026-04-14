@@ -26,9 +26,6 @@ void apply_calibration_to_fft(float *fft_acc, float sample_rate);
 // Function to compute Wiener Deconvolution in frequency domain
 float* compute_wiener_deconvolution(float *X, float *Y, int n);
 
-// Function to load the WAV file and convert it to an array of samples
-int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples);
-
 // Function to calculate correction curve from target curve and IR (Frequency domain division)
 float* calculate_correction_curve(float *ir_freq_domain, int n);
 

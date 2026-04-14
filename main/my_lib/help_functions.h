@@ -25,17 +25,18 @@ void print_wav(wave_header_t *wav_head);
 // Function to read EMM6 calibration data from a file and store it in an array
 void emm6_file_to_arr();
 
-// Function to save wav file FFT magnitudes to a cache file
-void save_fft_cache(float* mag, int num_bins);
-
 // Function to load FFT magnitudes from a cache file
 float* load_fft_cache(int num_bins);
 
 // Load FFT magnitudes, or if not cached, compute them from the WAV file and cache the results
-void wav_to_fft();
+float* wav_to_fft();
 
 // Perform Phase 1 of the algorithm by creating a Sampling task and a Test Signal Playback task
 void play_and_sample();
+
+// Function to load the WAV file and convert it to an array of samples
+int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples);
+
 
 #ifdef __cplusplus
 }

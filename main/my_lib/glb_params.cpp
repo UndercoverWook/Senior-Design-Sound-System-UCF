@@ -13,8 +13,8 @@ spi_device_handle_t  spi_hdl       = NULL;
 i2s_chan_handle_t    mcu_tx        = NULL;
 i2s_chan_handle_t    mcu_rx        = NULL;
 wave_reader_handle_t wav_hdl       = NULL;
-TaskHandle_t         task1_hdl     = NULL;
-TaskHandle_t         task2_hdl     = NULL;
+TaskHandle_t         bt_task       = NULL;
+TaskHandle_t         usb_task      = NULL;
 RingbufHandle_t      audio_ringbuf = NULL;
 EventGroupHandle_t   sync_tasks    = NULL;
 
@@ -30,3 +30,4 @@ const char *SAMPLING_TAG = "ADC Sampling";
 const char *WAV_TAG      = "WAV Test";
 const char *EQ_TAG       = "Auto EQ";
 const char *BM83_TAG     = "BM83 UART";
+const char *USB_TAG      = "USB";

@@ -28,55 +28,15 @@ void show_FFT(float *fft_avg, int num_bins, float sample_rate)
 
     for (int i = 0; i < num_bins; i++) {
         float freq_hz = (float)i * sample_rate / FFT_SIZE;
-        float mag_db  = 20.0f * log10f(fft_avg[i] + 1e-9f);
+
+        float real    = fft_avg[i * 2 + 0];          // Real part of bin i
+        float imag    = fft_avg[i * 2 + 1];          // Imaginary part of bin i
+        float mag     = sqrtf(real * real + imag * imag);  // True magnitude
+
+        float mag_db  = 20.0f * log10f(mag + 1e-9f); // Now always >= 0, no NaN
 
         ESP_LOGI(EQ_TAG, "Frequency: %8.2f Hz  |  Magnitude: %.4f dB", freq_hz, mag_db);
     }
-}
-
-int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
-{
-    wav_hdl = wave_reader_open(filename);
-
-    if (wav_hdl == NULL) {
-        ESP_LOGE(WAV_TAG, "Unable to open file: %s", filename);
-        return -1;
-    }
-
-    uint8_t* buff = (uint8_t*)calloc(1, BUFFER_BYTES);
-    if (buff == NULL) {
-        ESP_LOGE(WAV_TAG, "Failed to allocate buffer");
-        wave_reader_close(wav_hdl);
-        return -1;
-    }
-
-    size_t pos = 0;
-    int sample_count = 0;
-
-    while (sample_count < max_samples)
-    {
-        size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);
-
-        if (bytes_read == 0) {
-            break;  // End of file
-        }
-
-        pos += bytes_read;
-
-        // Reinterpret the raw bytes as 16-bit samples.
-        // Each uint16_t sample = 2 bytes, so iterate in steps of 2.
-        for (size_t i = 0; i + 1 < bytes_read && sample_count < max_samples; i += 2)
-        {
-            // Little-endian: low byte first, high byte second (standard WAV format)
-            samples[sample_count++] = (uint16_t)(buff[i] | (buff[i + 1] << 8));
-        }
-    }
-
-    wave_reader_close(wav_hdl);
-    free(buff);
-
-    ESP_LOGI(WAV_TAG, "Loaded %d samples from %s", sample_count, filename);
-    return sample_count;  // Return the number of samples actually read
 }
 
 void correction_ifft(float* correction_curve, int n)
@@ -101,10 +61,10 @@ void correction_ifft(float* correction_curve, int n)
 
 float* calculate_correction_curve(float *H, int n) 
 {
-    float *correction = (float *)heap_caps_malloc(2 * n * sizeof(float), MALLOC_CAP_8BIT);
+    float *correction = (float *)heap_caps_malloc(2 * FFT_SIZE * sizeof(float), MALLOC_CAP_8BIT);
     float max_gain = 4.0f; // +12dB max boost
 
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n * 2; i++) {
         float re = H[i*2 + 0];
         float im = H[i*2 + 1];
         float mag_sq = re*re + im*im + 1e-9f;
@@ -124,33 +84,32 @@ float* calculate_correction_curve(float *H, int n)
         correction[i*2 + 0] = inv_re;
         correction[i*2 + 1] = inv_im;
     }
-    free(H);
-
+    
     return correction;
 }
 
 float* compute_wiener_deconvolution(float *X, float *Y, int n) 
 {
-    float reg_factor = 0.01f;
+   float reg_factor = 0.01f;
     
-    for (int i = 0; i < n; i += 2) {
+    // Complex data has 2 floats per bin. Loop must go to n * 2.
+    for (int i = 0; i < n * 2; i += 2) { 
         float x_re = X[i],     x_im = X[i+1];
         float y_re = Y[i],     y_im = Y[i+1];
 
         float x_mag_sq = x_re*x_re + x_im*x_im;
         float divisor  = x_mag_sq + reg_factor;
 
-        float h_re = (y_re*x_re + y_im*x_im) / divisor;
-        float h_im = (y_im*x_re - y_re*x_im) / divisor;
+        // Perform complex division: (Y / X)
+        Y[i]   = (y_re * x_re + y_im * x_im) / divisor;
+        Y[i+1] = (y_im * x_re - y_re * x_im) / divisor;
 
-        Y[i]   = h_re;
-        Y[i+1] = h_im;
+       // ESP_LOGI(EQ_TAG, "real: %f  |  imag: %f", Y[i], Y[i+1]);
     }
-    free(X);
-
+    free(X); // Correctly freeing the reference buffer
     return Y;
 }
-
+    
 float apply_emm6_calibration(float freq_hz)
 {
     // Clamp to calibration range
@@ -184,7 +143,7 @@ void apply_calibration_to_fft(float *fft_acc, float sample_rate)
         float cal_db = apply_emm6_calibration(freq_hz);
 
         // Convert dB correction to linear scale factor
-        float scale = powf(10.0f, cal_db / 20.0f);
+        float scale = powf(10.0f, -cal_db / 20.0f);
 
         // Apply to complex bin — adjusts magnitude, preserves phase
         fft_acc[k*2 + 0] *= scale;  // real
@@ -197,7 +156,7 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
     // Allocate buffers for FFT processing and preprocessing
     float *y_cf       = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float) * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     float *wind_coeff = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float),     MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
-    float *fft_acc    = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float) * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    float *fft_acc    = (float *)heap_caps_malloc(FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_INTERNAL);
 
     if (!y_cf || !wind_coeff || !fft_acc) {
         ESP_LOGE(EQ_TAG, "FFT buffer alloc failed! y_cf=%p wind=%p fft_acc=%p", y_cf, wind_coeff, fft_acc);
@@ -218,8 +177,9 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
         uint16_t *chunk_start = samples + i * hop;
 
         for (int j = 0; j < FFT_SIZE; j++) {
+           // int16_t signed_sample = (int16_t)chunk_start[j];
             y_cf[j*2 + 0] = ((chunk_start[j] - 32768.0f) / 32768.0f) * wind_coeff[j]; // Normalize for 16-bit (1.5V bias)
-            y_cf[j*2 + 1] = 0.0f;                                                     // Real signal so imaginary part is zero
+            y_cf[j*2 + 1] = 0.0f;                                       // Real signal so imaginary part is zero
         }
 
         // Take FFT and bit reverse the result (required for ESP-DSP lib)
@@ -232,8 +192,6 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
             fft_acc[k*2 + 1] += y_cf[k*2 + 1];  // imaginary
         }
     }
-    
-    free(samples);
 
     // Average across all chunks
     if (num_chunks > 0) {
@@ -265,40 +223,54 @@ void normalize_taps(float* taps)
     }
 }
 
-float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq) 
+float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
 {   
     // Initialize FFT tables (must be done before calling any FFT functions) and compute FFT
     esp_err_t err = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
     if (err != ESP_OK) {
         ESP_LOGE("FFT", "Failed to initialize FFT, ERROR: %s", esp_err_to_name(err));
-        return;
+    } else {
+        ESP_LOGI(EQ_TAG, "FFT Initialized!");
     }
+
     // Make wav file to FFT
-    wav_to_fft();
+    float *wav_fft = wav_to_fft();
 
     // Load calibration file to array before applying calibration
     emm6_file_to_arr();
 
-    // Take FFT of sampled data and load magnitudes from WAV file (stored in SPIFFS)
-    float *wav_fft = load_fft_cache(FFT_SIZE);
     float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq);   // Apply calibration to get "true" magnitudes
-
+    free(samples);
+    
     // Apply calibration to samples FFT
     apply_calibration_to_fft(sample_fft, actual_freq);
-    
+    show_FFT(sample_fft, NUM_BINS, actual_freq);
+
     // Compute Wiener deconvolution on the magnitudes
     float *H = compute_wiener_deconvolution(wav_fft, sample_fft, FFT_SIZE);
 
     // Calculate correction curve based on Target Curve (1.0 across all bins)
     // and the computed H (system response) using Wiener deconvolution
     float *correction_curve = calculate_correction_curve(H, FFT_SIZE);
+    free(sample_fft);
+    free(wav_fft);
 
     // Turn correction curve into FIR filter coefficients (IFFT)
     correction_ifft(correction_curve, FFT_SIZE);
 
-    float *final_taps = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_INTERNAL);
+    float *final_taps = (float *)heap_caps_calloc(FFT_SIZE, sizeof(float), MALLOC_CAP_INTERNAL);
     float *window = (float *)malloc(FFT_SIZE * sizeof(float));
-    dsps_wind_blackman_f32(window, FFT_SIZE);
+
+    if (!final_taps || !window) {
+        ESP_LOGE(EQ_TAG, "Tap/window alloc failed");
+        free(final_taps);
+        free(window);
+        free(correction_curve);
+        dsps_fft2r_deinit_fc32();
+        return NULL;
+    }
+
+    dsps_wind_hann_f32(window, FFT_SIZE);
 
     // This moves the impulse from t=0 to the center of the buffer (Circular Shift)
     for (int i = 0; i < FFT_SIZE; i++) {
@@ -312,6 +284,13 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     
     // Normalize final taps for FIR design
     normalize_taps(final_taps);
+
+    // for (int i = 0; i < FFT_SIZE/8; i++) {
+    //     ESP_LOGI(EQ_TAG, "%f", final_taps[i]);
+    //     vTaskDelay(pdMS_TO_TICKS(10));          // Feed the Watchdog
+    // }
+
+    dsps_fft2r_deinit_fc32();
 
     return final_taps;
 }

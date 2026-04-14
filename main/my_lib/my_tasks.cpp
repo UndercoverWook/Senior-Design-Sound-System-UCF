@@ -6,9 +6,7 @@
 #include "my_usb_device.h"
 
 
-
-
-void vSample_task(void *args) 
+void vSample_task(void *args)
 {
 	configure_spi();
 
@@ -45,11 +43,28 @@ void vSample_task(void *args)
 
     float* fir_taps = run_Auto_EQ_algorithm(samples, actual_fs);
 
+	vTaskResume(bt_task);	// Resume once FIR coefficients are calculated
+
     vTaskDelete(NULL);  // Delete the task when done
 }
 
 void vPlay_WAV_task(void* args)
 {	
+	// Check status of BT module (if busy, suspend)
+	eTaskState bt_state  = eTaskGetState(bt_task);
+	//eTaskState usb_state = eTaskGetState(usb_task);
+
+	if (bt_state == eRunning)
+	{
+		i2s_channel_disable(mcu_rx);
+		i2s_channel_disable(mcu_tx);
+		vTaskSuspend(bt_task);
+	}// else if (usb_state == eRunning)
+	// {
+	// 	i2s_channel_disable(mcu_tx);
+	// 	vTaskSuspend(usb_task);
+	// }
+
 	configure_i2s_for_wav();
 
 	wave_header_t wav_head;
@@ -68,8 +83,6 @@ void vPlay_WAV_task(void* args)
 	uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Allocate space to store data coming from BT module
 	assert(buff);	
 	size_t wrote, pos = 0;
-	
-	i2s_channel_enable(mcu_tx);	// Enable I2S channel for transmission
 
 	xEventGroupSync(
         sync_tasks,
@@ -123,9 +136,12 @@ void vPlay_WAV_task(void* args)
 
 void vUSB_playback_task(void *arg)
 {
-	configure_i2s_for_audio(false);	// Set bluetooth == false 
-    i2s_channel_enable(mcu_tx);		// Enable I2S channel for transmission
+	configure_i2s_for_audio(false);	// Set bluetooth == false
     usb_uac_device_init();			// Initialize USB UAC device class
+
+	// gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0); // Lowest drive
+    // gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
+    // gpio_set_drive_capability(I2S_TX_LINE, GPIO_DRIVE_CAP_0);
 
     while (1) {
         size_t bytes_received = 0;
@@ -150,20 +166,27 @@ void vBT_playback_task(void *arg)
     }
 
 	ESP_LOGI(BM83_TAG, "BM83 Transmitting!");
-	configure_i2s_for_audio(false);
+	configure_i2s_for_audio(true);
 	ESP_LOGI(BM83_TAG, "I2S Configured");
 
-	// Enable I2S channels
-	ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
-	ESP_ERROR_CHECK(i2s_channel_enable(mcu_rx));
-
-	uint8_t *bt_buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Initialize array to store data coming from BT module
+	uint8_t *bt_buff = (uint8_t *)heap_caps_malloc(BUFFER_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);	// Initialize array to store data coming from BT module
 	assert(bt_buff);	
 	
 	size_t bytes_read;
 	size_t wrote = 0;
 
-	// 1. Force GPIO 2 to be a floating input (no pull-up/down)
+	gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
+    gpio_pullup_dis(GPIO_NUM_2);
+    gpio_pulldown_dis(GPIO_NUM_2);
+	gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
+
+    esp_rom_gpio_connect_out_signal(GPIO_NUM_2, 0x100, false, false);
+    esp_rom_gpio_connect_in_signal(GPIO_NUM_2, 25, false);
+
+    gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0); // Lowest drive
+    gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
+   	gpio_set_drive_capability(I2S_TX_LINE, GPIO_DRIVE_CAP_0);
+
 	gpio_config_t io_conf = {
 		.pin_bit_mask = (1ULL << GPIO_NUM_2),
 		.mode = GPIO_MODE_INPUT,
@@ -182,40 +205,36 @@ void vBT_playback_task(void *arg)
 		esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);
 
 		// Process 16-bit data to float for FIR processing (convert back to 16-bit for DAC)
-		if (activate_eq &&bytes_read > 0) {
-			int16_t *raw_samples = (int16_t *)bt_buff;
-			int sample_count = bytes_read / 2;
+		// if (activate_eq && bytes_read > 0) {
+		// 	int16_t *raw_samples = (int16_t *)bt_buff;
+		// 	int sample_count = bytes_read / 2;
 
-			for (int i = 0; i < sample_count; i++) {
-				float_conv_buff[i] = (raw_samples[i] / 32768.0f) * 0.25f;
-			}
+		// 	for (int i = 0; i < sample_count; i++) {
+		// 		float_conv_buff[i] = (raw_samples[i] / 32768.0f) * 0.25f;
+		// 	}
 
-			dsps_fir_f32_aes3(&global_eq, float_conv_buff, float_conv_buff, sample_count);
+		// 	dsps_fir_f32_aes3(&global_eq, float_conv_buff, float_conv_buff, sample_count);
 
-			for (int i = 0; i < sample_count; i++) {
-				float val = float_conv_buff[i] * 32768.0f;
-				if (val > 32767.0f) val = 32767.0f;
-				if (val < -32768.0f) val = -32768.0f;
-				raw_samples[i] = (int16_t)val;
-			}
-		}
+		// 	for (int i = 0; i < sample_count; i++) {
+		// 		float val = float_conv_buff[i] * 32768.0f;
+		// 		if (val > 32767.0f) val = 32767.0f;
+		// 		if (val < -32768.0f) val = -32768.0f;
+		// 		raw_samples[i] = (int16_t)val;
+		// 	}
+		// }
 		
 		size_t bytes_to_w = bytes_read;
 		uint8_t *p = bt_buff;
 		
 		while (bytes_to_w > 0)
 		{			
-			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
-	
-			if (r != ESP_OK){
-				ESP_LOGE(I2S_TAG, "I2S threw ERROR: %d", r);
-				break;
-			}
-			
+			ESP_ERROR_CHECK(i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY));
 			bytes_to_w -= wrote;		// If written -> OK, then decrease counter
 			p += wrote;					// Increase pointer to buffer			
 		}// end of inner while loop
 	}// end of main while loop
+
+	ESP_LOGW(BM83_TAG, "Bluetooth device disconnected");
 	
 	free(bt_buff);
 	i2s_channel_disable(mcu_tx);
