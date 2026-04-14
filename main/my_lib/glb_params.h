@@ -90,6 +90,12 @@ static const gpio_num_t USB_D_PLUS      = GPIO_NUM_20;
 static const gpio_num_t I2S_BIT_CLK     = GPIO_NUM_21;
 static const gpio_num_t BT_WAKE         = GPIO_NUM_48;
 
+// Dedicated BM83 -> ESP32 -> DAC streaming pins from the working BM83 demo.
+static const gpio_num_t BM83_I2S_TX_LINE   = GPIO_NUM_6;
+static const gpio_num_t BM83_I2S_LRCLK_PIN = GPIO_NUM_7;
+static const gpio_num_t BM83_I2S_RX_LINE   = GPIO_NUM_10;
+static const gpio_num_t BM83_I2S_BIT_CLK   = GPIO_NUM_12;
+
 typedef enum {
     I2S_MODE_NONE = 0,
     I2S_MODE_WAV,
@@ -101,6 +107,8 @@ extern gptimer_handle_t    sync_timer;
 extern spi_device_handle_t spi_hdl;
 extern i2s_chan_handle_t   mcu_tx;
 extern i2s_chan_handle_t   mcu_rx;
+extern i2s_chan_handle_t   audio_tx;
+extern i2s_chan_handle_t   audio_rx;
 extern wave_reader_handle_t wav_hdl;
 extern TaskHandle_t        task1_hdl;
 extern TaskHandle_t        task2_hdl;

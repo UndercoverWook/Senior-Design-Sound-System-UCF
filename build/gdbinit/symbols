@@ -13,8 +13,8 @@ end
 
 # Load bootloader symbols
 set confirm off
-    add-symbol-file C:/Users/bossx/School/SeniorDesign/ESP_files_combined/build/bootloader/bootloader.elf
+    add-symbol-file C:/Users/bossx/School/SeniorDesign/ESP_files_combined_merged/build/bootloader/bootloader.elf
 set confirm on
 
 # Load application symbols
-file C:/Users/bossx/School/SeniorDesign/ESP_files_combined/build/app-template.elf
+file C:/Users/bossx/School/SeniorDesign/ESP_files_combined_merged/build/app-template.elf

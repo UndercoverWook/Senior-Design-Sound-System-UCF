@@ -1,4 +1,4 @@
-# Install script for directory: C:/Users/bossx/School/SeniorDesign/ESP_files_combined/main
+# Install script for directory: C:/Users/bossx/School/SeniorDesign/ESP_files_combined_merged/main
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)

@@ -1,4 +1,4 @@
-# Install script for directory: C:/Users/bossx/School/SeniorDesign/ESP_files_combined/managed_components/espressif__tinyusb
+# Install script for directory: C:/Users/bossx/School/SeniorDesign/ESP_files_combined_merged/managed_components/espressif__tinyusb
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)

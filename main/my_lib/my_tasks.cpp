@@ -5,6 +5,9 @@
 #include "config_functions.h"
 #include "my_usb_device.h"
 
+#include <algorithm>
+#include <cstring>
+
 static inline uint32_t read_cpu_cycle_count()
 {
     uint32_t ccount;
@@ -57,11 +60,7 @@ void vSample_task(void *args)
         return;
     }
 
-    xEventGroupSync(
-        sync_tasks,
-        TASK_A_READY_BIT,
-        ALL_TASKS_READY,
-        portMAX_DELAY);
+    xEventGroupSync(sync_tasks, TASK_A_READY_BIT, ALL_TASKS_READY, portMAX_DELAY);
 
     const uint64_t cpu_ticks_per_us = (uint64_t)esp_rom_get_cpu_ticks_per_us();
     const uint32_t cycles_per_sample =
@@ -224,15 +223,8 @@ void vPlay_WAV_task(void *args)
     preload_pos -= (preload_pos % in_frame_bytes);
     const size_t frames_loaded = preload_pos / in_frame_bytes;
 
-    uint8_t *out_buff = input_is_mono ? (uint8_t *)calloc(1, BUFFER_BYTES) : NULL;
-    if (input_is_mono && out_buff == NULL) {
-        ESP_LOGE(WAV_TAG, "Failed to allocate mono expansion buffer");
-        free(preloaded_pcm);
-        wav_task_running = false;
-        finish_play_test_if_done();
-        vTaskDelete(NULL);
-        return;
-    }
+    static uint8_t mono_expand_buffer[BUFFER_BYTES];
+    uint8_t *out_buff = input_is_mono ? mono_expand_buffer : NULL;
 
     ESP_LOGI(WAV_TAG,
              "Starting WAV playback%s from preloaded buffer (%u frames, %u Hz, %u channels)",
@@ -241,18 +233,11 @@ void vPlay_WAV_task(void *args)
              (unsigned)wav_head.sample_rate,
              (unsigned)wav_head.n_channels);
 
-    xEventGroupSync(
-        sync_tasks,
-        TASK_B_READY_BIT,
-        ALL_TASKS_READY,
-        portMAX_DELAY);
+    xEventGroupSync(sync_tasks, TASK_B_READY_BIT, ALL_TASKS_READY, portMAX_DELAY);
 
     esp_err_t enable_tx_err = i2s_channel_enable(mcu_tx);
     if (enable_tx_err != ESP_OK) {
         ESP_LOGE(WAV_TAG, "Failed to enable I2S TX channel: %s", esp_err_to_name(enable_tx_err));
-        if (out_buff != NULL) {
-            free(out_buff);
-        }
         free(preloaded_pcm);
         wav_task_running = false;
         finish_play_test_if_done();
@@ -265,9 +250,6 @@ void vPlay_WAV_task(void *args)
         if (enable_rx_err != ESP_OK) {
             ESP_LOGE(WAV_TAG, "Failed to enable I2S RX channel: %s", esp_err_to_name(enable_rx_err));
             i2s_channel_disable(mcu_tx);
-            if (out_buff != NULL) {
-                free(out_buff);
-            }
             free(preloaded_pcm);
             wav_task_running = false;
             finish_play_test_if_done();
@@ -327,9 +309,6 @@ void vPlay_WAV_task(void *args)
     }
     i2s_channel_disable(mcu_tx);
 
-    if (out_buff != NULL) {
-        free(out_buff);
-    }
     free(preloaded_pcm);
 
     ESP_LOGI(WAV_TAG, "WAV playback task finished");
@@ -341,59 +320,146 @@ void vPlay_WAV_task(void *args)
 
 void vUSB_playback_task(void *arg)
 {
+    (void)arg;
+
     usb_uac_device_init();
     configure_i2s_for_audio();
-    i2s_channel_enable(mcu_tx);
+    if (audio_tx == NULL) {
+        ESP_LOGE(I2S_TAG, "USB/BM83 audio TX handle is NULL");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_ERROR_CHECK(i2s_channel_enable(audio_tx));
 
     while (1) {
         size_t bytes_received = 0;
-        uint8_t *data = (uint8_t *)xRingbufferReceiveUpTo(
-            audio_ringbuf, &bytes_received, portMAX_DELAY, 192);
+        uint8_t *data = (uint8_t *)xRingbufferReceiveUpTo(audio_ringbuf, &bytes_received, portMAX_DELAY, 192);
         if (data) {
             size_t bytes_written = 0;
-            i2s_channel_write(mcu_tx, data, bytes_received, &bytes_written, portMAX_DELAY);
+            i2s_channel_write(audio_tx, data, bytes_received, &bytes_written, portMAX_DELAY);
             vRingbufferReturnItem(audio_ringbuf, data);
         }
     }
 
-    i2s_channel_disable(mcu_tx);
+    i2s_channel_disable(audio_tx);
+    if (audio_rx != NULL) {
+        i2s_channel_disable(audio_rx);
+    }
     vTaskDelete(NULL);
 }
 
 void vBT_playback_task(void *arg)
 {
+    (void)arg;
+
     bm83_tx_ind_init();
-    while (1) {
-        int level = gpio_get_level(MCU_WAKE);
-        if (level == 0) break;
-        vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_LOGI(BM83_TAG, "BM83 playback task started");
+    ESP_LOGI(BM83_TAG, "Configuring BM83 audio bridge immediately...");
+
+    configure_i2s_for_audio();
+    if (audio_tx == NULL || audio_rx == NULL) {
+        ESP_LOGE(I2S_TAG, "BM83 audio handles not available after configure_i2s_for_audio()");
+        vTaskDelete(NULL);
+        return;
     }
 
-    ESP_LOGI(BM83_TAG, "BM83 Transmitting!");
-    configure_i2s_for_audio();
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << I2S_RX_LINE),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
 
-    i2s_channel_enable(mcu_tx);
-    i2s_channel_enable(mcu_rx);
+    bool bridge_enabled = false;
+    bool seen_nonzero_audio = false;
+    int consecutive_zero_buffers = 0;
 
     uint8_t *bt_buff = (uint8_t *)calloc(1, BUFFER_BYTES);
-    assert(bt_buff);
-
-    size_t bytes_read;
-    size_t wrote = 0;
-
+    if (bt_buff == NULL) {
+        ESP_LOGE(BM83_TAG, "Failed to allocate BM83 audio buffer");
+        vTaskDelete(NULL);
+        return;
+    }
+        /* teammate path */
+    esp_rom_gpio_connect_out_signal(I2S_RX_LINE, 0x100, false, false);
+    esp_rom_gpio_connect_in_signal(I2S_RX_LINE, 25, false);
+    gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
     while (1)
     {
-        i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);
+        /*
+         * WAV playback owns the DAC path while the play test runs.
+         * Pause the BM83 bridge, then resume it automatically afterward.
+         */
+        if (play_test_running) {
+            if (bridge_enabled) {
+                i2s_channel_disable(audio_tx);
+                i2s_channel_disable(audio_rx);
+                bridge_enabled = false;
+                ESP_LOGI(BM83_TAG, "BM83 bridge paused while Play Test Tone is active");
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        if (!bridge_enabled) {
+            ESP_ERROR_CHECK(i2s_channel_enable(audio_tx));
+            ESP_ERROR_CHECK(i2s_channel_enable(audio_rx));
+            bridge_enabled = true;
+            ESP_LOGI(BM83_TAG, "BM83 I2S bridge enabled");
+        }
+
+        size_t bytes_read = 0;
+        esp_err_t rr = i2s_channel_read(audio_rx, bt_buff, BUFFER_BYTES, &bytes_read, pdMS_TO_TICKS(250));
+        if (rr == ESP_ERR_TIMEOUT) {
+            continue;
+        }
+        if (rr != ESP_OK) {
+            ESP_LOGE(I2S_TAG, "BM83 i2s_channel_read failed: %s", esp_err_to_name(rr));
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        if (bytes_read == 0) {
+            continue;
+        }
+
+        bool any_nonzero = false;
+        for (size_t i = 0; i < bytes_read; ++i) {
+            if (bt_buff[i] != 0) {
+                any_nonzero = true;
+                break;
+            }
+        }
+
+        if (!any_nonzero) {
+            consecutive_zero_buffers++;
+            if ((consecutive_zero_buffers % 25) == 0) {
+                ESP_LOGW(BM83_TAG, "BM83 received %d consecutive all-zero buffers", consecutive_zero_buffers);
+            }
+            continue;
+        }
+
+        consecutive_zero_buffers = 0;
+
+        if (!seen_nonzero_audio) {
+            ESP_LOGI(BM83_TAG, "BM83 non-zero audio stream detected (%u bytes)", (unsigned)bytes_read);
+            seen_nonzero_audio = true;
+        }
 
         size_t bytes_to_w = bytes_read;
         uint8_t *p = bt_buff;
 
         while (bytes_to_w > 0)
         {
-            esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
+            size_t wrote = 0;
+            esp_err_t r = i2s_channel_write(audio_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
 
             if (r != ESP_OK) {
-                ESP_LOGE(I2S_TAG, "I2S threw ERROR: %d", r);
+                ESP_LOGE(I2S_TAG, "BM83 i2s_channel_write failed: %s", esp_err_to_name(r));
                 break;
             }
 
@@ -402,13 +468,16 @@ void vBT_playback_task(void *arg)
                 vTaskDelay(pdMS_TO_TICKS(1));
                 continue;
             }
+
             bytes_to_w -= wrote;
             p += wrote;
         }
     }
 
     free(bt_buff);
-    i2s_channel_disable(mcu_tx);
-    i2s_channel_disable(mcu_rx);
+    if (bridge_enabled) {
+        i2s_channel_disable(audio_tx);
+        i2s_channel_disable(audio_rx);
+    }
     vTaskDelete(NULL);
 }

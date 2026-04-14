@@ -1,4 +1,4 @@
-# Install script for directory: C:/Users/bossx/School/SeniorDesign/ESP_files_combined/managed_components/mateusglucas__wave
+# Install script for directory: C:/Users/bossx/School/SeniorDesign/ESP_files_combined_merged/managed_components/mateusglucas__wave
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)

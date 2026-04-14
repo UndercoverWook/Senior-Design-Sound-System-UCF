@@ -44,6 +44,7 @@ static bool fft_initialized = false;
 
 static TaskHandle_t histogram_task_handle = NULL;
 static TaskHandle_t fft_task_handle = NULL;
+static TaskHandle_t bm83_task_handle = NULL;
 static SemaphoreHandle_t sample_sem = NULL;
 
 static float wind[FFT_SIZE];
@@ -65,7 +66,8 @@ static void send_ble_text_notification(const char *text);
 static void handle_app_command(const char *cmd);
 static void start_histogram_stream(void);
 static void stop_histogram_stream(void);
-static void start_fft_capture(void);
+static void run_fft_capture_once(void);
+static void start_bm83_bridge(void);
 
 static int gatt_access_cb(uint16_t conn_handle,
                           uint16_t attr_handle,
@@ -87,9 +89,65 @@ static bool IRAM_ATTR on_timer_alarm(gptimer_handle_t timer,
 
 void play_and_sample()
 {
+    if (play_test_running) {
+        ESP_LOGW(BLE_TAG, "Play test already running");
+        send_ble_text_notification("BUSY:PLAY_WAV");
+        return;
+    }
+
+    if (sync_tasks != NULL) {
+        vEventGroupDelete(sync_tasks);
+        sync_tasks = NULL;
+    }
+
     sync_tasks = xEventGroupCreate();
-    xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE0);
-    xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
+    if (sync_tasks == NULL) {
+        ESP_LOGE(BLE_TAG, "Failed to create sync event group");
+        send_ble_text_notification("ERR:PLAY_WAV");
+        return;
+    }
+
+    play_test_running = true;
+    sample_task_running = true;
+    wav_task_running = true;
+    task1_hdl = NULL;
+    task2_hdl = NULL;
+
+    BaseType_t rc_a = xTaskCreatePinnedToCore(
+        vSample_task,
+        "ADC Sampling",
+        6144,
+        NULL,
+        configMAX_PRIORITIES - 2,
+        &task1_hdl,
+        CORE0);
+
+    BaseType_t rc_b = xTaskCreatePinnedToCore(
+        vPlay_WAV_task,
+        "WAV Playback",
+        6144,
+        NULL,
+        configMAX_PRIORITIES - 1,
+        &task2_hdl,
+        CORE1);
+
+    if (rc_a != pdPASS || rc_b != pdPASS) {
+        ESP_LOGE(BLE_TAG, "Failed to create play test tasks (sample=%ld, wav=%ld)", (long)rc_a, (long)rc_b);
+        if (task1_hdl != NULL) {
+            vTaskDelete(task1_hdl);
+            task1_hdl = NULL;
+        }
+        if (task2_hdl != NULL) {
+            vTaskDelete(task2_hdl);
+            task2_hdl = NULL;
+        }
+        play_test_running = false;
+        sample_task_running = false;
+        wav_task_running = false;
+        vEventGroupDelete(sync_tasks);
+        sync_tasks = NULL;
+        send_ble_text_notification("ERR:PLAY_WAV");
+    }
 }
 
 static void set_last_tx_value(const char *text)
@@ -290,28 +348,26 @@ static void compute_fft_and_notify(uint16_t *samples, float actual_fs)
     send_ble_text_notification(payload);
 }
 
-static void adc_fft_task(void *args)
+static void run_fft_capture_once(void)
 {
-    (void)args;
     capture_running = true;
 
     if (!ensure_histogram_infra()) {
         send_ble_text_notification("FFT_ERROR");
         capture_running = false;
-        fft_task_handle = NULL;
-        vTaskDelete(NULL);
         return;
     }
 
-    uint16_t *samples = (uint16_t *)heap_caps_malloc(FFT_SIZE * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    uint16_t *samples = (uint16_t *)heap_caps_malloc(FFT_SIZE * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (samples == NULL) {
+        samples = (uint16_t *)heap_caps_malloc(FFT_SIZE * sizeof(uint16_t), MALLOC_CAP_8BIT);
+    }
     if (samples == NULL) {
         samples = (uint16_t *)calloc(FFT_SIZE, sizeof(uint16_t));
     }
     if (samples == NULL) {
         send_ble_text_notification("FFT_ERROR");
         capture_running = false;
-        fft_task_handle = NULL;
-        vTaskDelete(NULL);
         return;
     }
 
@@ -373,8 +429,6 @@ static void adc_fft_task(void *args)
 
     free(samples);
     capture_running = false;
-    fft_task_handle = NULL;
-    vTaskDelete(NULL);
 }
 
 static void histogram_stream_task(void *args)
@@ -384,7 +438,7 @@ static void histogram_stream_task(void *args)
 
     while (histogram_stream_enabled && calibration_active) {
         if (notify_enabled && current_conn_handle != BLE_HS_CONN_HANDLE_NONE && !capture_running) {
-            start_fft_capture();
+            run_fft_capture_once();
         }
         vTaskDelay(pdMS_TO_TICKS(150));
     }
@@ -409,7 +463,7 @@ static void start_histogram_stream(void)
     BaseType_t rc = xTaskCreatePinnedToCore(
         histogram_stream_task,
         "LiveHistogram",
-        8192,
+        STACK_DEPTH,
         NULL,
         configMAX_PRIORITIES - 3,
         &histogram_task_handle,
@@ -428,25 +482,26 @@ static void stop_histogram_stream(void)
     histogram_stream_enabled = false;
 }
 
-static void start_fft_capture(void)
+static void start_bm83_bridge(void)
 {
-    if (capture_running) {
+    if (bm83_task_handle != NULL) {
         return;
     }
 
     BaseType_t rc = xTaskCreatePinnedToCore(
-        adc_fft_task,
-        "ADC_FFT",
+        vBT_playback_task,
+        "BM83Playback",
         8192,
         NULL,
-        configMAX_PRIORITIES - 1,
-        &fft_task_handle,
-        CORE0);
+        configMAX_PRIORITIES - 4,
+        &bm83_task_handle,
+        CORE1);
 
     if (rc != pdPASS) {
-        ESP_LOGE(FFT_TAG, "Failed to create ADC_FFT task");
-        capture_running = false;
-        fft_task_handle = NULL;
+        ESP_LOGE(BLE_TAG, "Failed to create BM83 playback task");
+        bm83_task_handle = NULL;
+    } else {
+        ESP_LOGI(BLE_TAG, "BM83 playback task started");
     }
 }
 
@@ -753,6 +808,8 @@ extern "C" void app_main(void)
     ble_svc_gap_device_name_set("ESP32_AutoEQ");
     ble_hs_cfg.sync_cb = on_sync;
     nimble_port_freertos_init(host_task);
+
+    start_bm83_bridge();
 
     ESP_LOGI(TAG, "System ready. Waiting for BLE commands...");
 }
