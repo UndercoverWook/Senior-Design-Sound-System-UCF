@@ -15,6 +15,42 @@ static inline uint32_t read_cpu_cycle_count()
     return ccount;
 }
 
+/*
+ * Synchronization between the BM83 bridge task and the app-triggered WAV task.
+ *
+ * The root problem is that both paths use the same physical BCLK / WS / DOUT /
+ * DIN pins. The BM83 bridge must fully release those pins before the WAV task
+ * configures I2S0, and it must fully reclaim them after the WAV path finishes.
+ *
+ * These flags are intentionally file-local because only my_tasks.cpp needs them.
+ */
+static volatile bool s_bm83_pause_request = false;
+static volatile bool s_bm83_is_paused = false;
+static volatile bool s_bm83_bridge_needs_reconfigure = false;
+
+static void request_bm83_release_for_wav()
+{
+    s_bm83_pause_request = true;
+
+    const TickType_t step = pdMS_TO_TICKS(10);
+    const int max_wait_steps = 150; // up to ~1.5 s
+
+    for (int i = 0; i < max_wait_steps; ++i) {
+        if (s_bm83_is_paused || (audio_tx == NULL && audio_rx == NULL)) {
+            ESP_LOGI(BM83_TAG, "BM83 bridge released for Play Test Tone");
+            return;
+        }
+        vTaskDelay(step);
+    }
+
+    ESP_LOGW(BM83_TAG, "Timed out waiting for BM83 bridge release; continuing anyway");
+}
+
+static void allow_bm83_resume_after_wav()
+{
+    s_bm83_pause_request = false;
+}
+
 static void finish_play_test_if_done()
 {
     if (!sample_task_running && !wav_task_running) {
@@ -27,6 +63,8 @@ static void finish_play_test_if_done()
 
         task1_hdl = NULL;
         task2_hdl = NULL;
+
+        allow_bm83_resume_after_wav();
     }
 }
 
@@ -113,6 +151,14 @@ static void expand_mono16_to_stereo16(const uint8_t *mono_in,
 
 void vPlay_WAV_task(void *args)
 {
+    /*
+     * Crucial ordering fix:
+     * Release the BM83 bridge BEFORE configuring the WAV path.
+     * The prior log showed GPIO conflict warnings because WAV configured I2S0
+     * first and only afterward did the BM83 task notice play_test_running.
+     */
+    request_bm83_release_for_wav();
+
     configure_i2s_for_wav();
     if (mcu_tx == NULL) {
         ESP_LOGE(WAV_TAG, "I2S TX handle not available, aborting WAV task");
@@ -306,8 +352,12 @@ void vPlay_WAV_task(void *args)
 
     if (mcu_rx != NULL) {
         i2s_channel_disable(mcu_rx);
+        i2s_del_channel(mcu_rx);
+        mcu_rx = NULL;
     }
     i2s_channel_disable(mcu_tx);
+    i2s_del_channel(mcu_tx);
+    mcu_tx = NULL;
 
     free(preloaded_pcm);
 
@@ -365,25 +415,8 @@ void vBT_playback_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-    ESP_LOGI(BM83_TAG, "BM83 paired/active. Initializing audio bridge...");
-    configure_i2s_for_audio();
-    if (audio_tx == NULL || audio_rx == NULL) {
-        ESP_LOGE(I2S_TAG, "BM83 audio handles not available after configure_i2s_for_audio()");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << I2S_RX_LINE),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io_conf);
-    ESP_LOGI(BM83_TAG, "BM83 RX pin prepared on GPIO %d", (int)I2S_RX_LINE);
-
     bool bridge_enabled = false;
+    bool bridge_needs_reconfigure = true;
     bool seen_nonzero_audio = false;
     int consecutive_zero_buffers = 0;
 
@@ -396,21 +429,55 @@ void vBT_playback_task(void *arg)
 
     while (1)
     {
-        if (play_test_running) {
+        if (s_bm83_pause_request || play_test_running) {
             if (bridge_enabled) {
                 i2s_channel_disable(audio_tx);
                 i2s_channel_disable(audio_rx);
+                i2s_del_channel(audio_tx);
+                i2s_del_channel(audio_rx);
+                audio_tx = NULL;
+                audio_rx = NULL;
+
                 bridge_enabled = false;
-                ESP_LOGI(BM83_TAG, "BM83 bridge paused while Play Test Tone is active");
+                bridge_needs_reconfigure = true;
+                seen_nonzero_audio = false;
+                consecutive_zero_buffers = 0;
+                s_bm83_is_paused = true;
+                s_bm83_bridge_needs_reconfigure = true;
+                ESP_LOGI(BM83_TAG, "BM83 bridge released while Play Test Tone is active");
+            } else {
+                s_bm83_is_paused = true;
             }
+
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
-        if (!bridge_enabled) {
+        if (bridge_needs_reconfigure) {
+            ESP_LOGI(BM83_TAG, "Reconfiguring BM83 audio bridge...");
+            configure_i2s_for_audio();
+            if (audio_tx == NULL || audio_rx == NULL) {
+                ESP_LOGE(I2S_TAG, "BM83 audio handles not available after configure_i2s_for_audio()");
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+
+            gpio_config_t io_conf = {
+                .pin_bit_mask = (1ULL << I2S_RX_LINE),
+                .mode = GPIO_MODE_INPUT,
+                .pull_up_en = GPIO_PULLUP_DISABLE,
+                .pull_down_en = GPIO_PULLDOWN_DISABLE,
+                .intr_type = GPIO_INTR_DISABLE,
+            };
+            gpio_config(&io_conf);
+            ESP_LOGI(BM83_TAG, "BM83 RX pin prepared on GPIO %d", (int)I2S_RX_LINE);
+
             ESP_ERROR_CHECK(i2s_channel_enable(audio_tx));
             ESP_ERROR_CHECK(i2s_channel_enable(audio_rx));
             bridge_enabled = true;
+            bridge_needs_reconfigure = false;
+            s_bm83_is_paused = false;
+            s_bm83_bridge_needs_reconfigure = false;
             ESP_LOGI(BM83_TAG, "BM83 I2S bridge enabled");
         }
 
@@ -477,9 +544,15 @@ void vBT_playback_task(void *arg)
     }
 
     free(bt_buff);
+
     if (bridge_enabled) {
         i2s_channel_disable(audio_tx);
         i2s_channel_disable(audio_rx);
+        i2s_del_channel(audio_tx);
+        i2s_del_channel(audio_rx);
+        audio_tx = NULL;
+        audio_rx = NULL;
     }
+
     vTaskDelete(NULL);
 }
