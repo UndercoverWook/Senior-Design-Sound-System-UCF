@@ -15,6 +15,7 @@
 #include "auto_eq_help.h"
 #include "help_functions.h"
 #include "glb_params.h"
+#include "ble_control.h"
 
 static const int CAL_NUM_POINTS = 256;
 static const float CAL_SENSITIVITY_1KHZ = -38.1f;  // dB re 1V/Pa at 1kHz
@@ -244,6 +245,7 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     
     // Apply calibration to samples FFT
     apply_calibration_to_fft(sample_fft, actual_freq);
+    ble_publish_fft_bins_from_complex(sample_fft, actual_freq);
     show_FFT(sample_fft, NUM_BINS, actual_freq);
 
     // Compute Wiener deconvolution on the magnitudes

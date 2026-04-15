@@ -135,7 +135,7 @@ float* load_fft_cache(int num_bins)
 float* wav_to_fft()
 {
     uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    int count = load_wav_to_array("/storage/stereo_sweep.wav", samples, N_SAMPLES);
+    int count = load_wav_to_array("/storage/44k_full_sweep.wav", samples, N_SAMPLES);
 
     float* wav_fft = compute_fft(samples, count, SAMPLE_RATE);
     free(samples);
@@ -145,6 +145,19 @@ float* wav_to_fft()
 
 void play_and_sample()
 {
+    if (calibration_in_progress) {
+        ESP_LOGW(EQ_TAG, "Calibration already running");
+        return;
+    }
+
+    calibration_in_progress = true;
+    wav_playback_active = true;
+
+    if (sync_tasks != NULL) {
+        vEventGroupDelete(sync_tasks);
+        sync_tasks = NULL;
+    }
+
     sync_tasks = xEventGroupCreate();
     xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE0);
     xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);

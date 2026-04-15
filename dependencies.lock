@@ -58,7 +58,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.2
+    version: 5.5.3
   mateusglucas/wave:
     component_hash: f5654aa29e49ddce8f086119939b25ab1eb1455be2752377052cff68d07935fb
     dependencies:

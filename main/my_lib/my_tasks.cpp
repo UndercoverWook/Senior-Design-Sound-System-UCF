@@ -42,7 +42,9 @@ void vSample_task(void *args)
 	ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
 
     float* fir_taps = run_Auto_EQ_algorithm(samples, actual_fs);
+    (void)fir_taps;
 
+    calibration_in_progress = false;
 	vTaskResume(bt_task);	// Resume once FIR coefficients are calculated
 
     vTaskDelete(NULL);  // Delete the task when done
@@ -50,6 +52,9 @@ void vSample_task(void *args)
 
 void vPlay_WAV_task(void* args)
 {	
+    wav_playback_active = true;
+    bool resume_bt_after_play = false;
+
 	// Check status of BT module (if busy, suspend)
 	eTaskState bt_state  = eTaskGetState(bt_task);
 	//eTaskState usb_state = eTaskGetState(usb_task);
@@ -59,6 +64,7 @@ void vPlay_WAV_task(void* args)
 		i2s_channel_disable(mcu_rx);
 		i2s_channel_disable(mcu_tx);
 		vTaskSuspend(bt_task);
+        resume_bt_after_play = !calibration_in_progress;
 	}// else if (usb_state == eRunning)
 	// {
 	// 	i2s_channel_disable(mcu_tx);
@@ -68,15 +74,32 @@ void vPlay_WAV_task(void* args)
 	configure_i2s_for_wav();
 
 	wave_header_t wav_head;
-	wav_hdl = wave_reader_open("/storage/stereo_sweep.wav");
+	wav_hdl = wave_reader_open("/storage/44k_full_sweep.wav");
 			
 	if (wav_hdl == NULL) {
 		ESP_LOGE(WAV_TAG, "Unable to open read!");
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+        }
+        if (resume_bt_after_play) {
+            vTaskResume(bt_task);
+        }
 		vTaskDelete(NULL);
 	}
 		
 	if (wave_read_header(wav_hdl, &wav_head) != 0) {
 		ESP_LOGE(WAV_TAG, "Unable to read WAV file header!");
+        wave_reader_close(wav_hdl);
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+        }
+        if (resume_bt_after_play) {
+            vTaskResume(bt_task);
+        }
 		vTaskDelete(NULL);
 	}
 		
@@ -84,12 +107,14 @@ void vPlay_WAV_task(void* args)
 	assert(buff);	
 	size_t wrote, pos = 0;
 
+    if (calibration_in_progress && sync_tasks != NULL) {
 	xEventGroupSync(
         sync_tasks,
         TASK_B_READY_BIT,
         ALL_TASKS_READY,
         portMAX_DELAY
     );
+    }
 
 	uint32_t t_start = esp_log_timestamp();
 	while (1)
@@ -112,6 +137,7 @@ void vPlay_WAV_task(void* args)
 			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, pdMS_TO_TICKS(remaining));	
 				
 			if (r != ESP_OK){
+                ESP_LOGE(WAV_TAG, "i2s_channel_write failed: %s", esp_err_to_name(r));
 				break;
 			}
 				
@@ -131,6 +157,13 @@ void vPlay_WAV_task(void* args)
 	i2s_channel_disable(mcu_tx);
 	wave_reader_close(wav_hdl);	// close wav file
 	free(buff);
+
+    configure_i2s_for_audio(true);
+
+    wav_playback_active = false;
+    if (resume_bt_after_play) {
+        vTaskResume(bt_task);
+    }
 	vTaskDelete(NULL);
 }
 

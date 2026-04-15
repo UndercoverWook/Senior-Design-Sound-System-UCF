@@ -107,6 +107,8 @@ extern fir_f32_s            global_eq;
 extern float cal_values [256][2];			// To store calibration values as a pair of values in a 2D array fashion
 static const uint32_t STACK_DEPTH = 4096;	// Stack allocation for FreeRTOS Tasks
 extern bool activate_eq;                    // Global flag to indicate whether to apply EQ or not 
+extern volatile bool wav_playback_active;     // True while the standalone WAV playback task is active
+extern volatile bool calibration_in_progress; // True while Auto-EQ calibration is running
 
 // TAGS:
 extern const char *STORAGE_TAG;

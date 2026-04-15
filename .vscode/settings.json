@@ -3,7 +3,7 @@
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.currentSetup": "C:\\esp\\v5.5.2\\esp-idf",
+  "idf.currentSetup": "C:\\esp\\v5.5.3\\esp-idf",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3"
   },
@@ -14,5 +14,5 @@
     "--compile-commands-dir=c:\\Users\\matia\\SD_Final_V1\\build"
   ],
   "idf.flashType": "UART",
-  "idf.portWin": "COM9"
+  "idf.portWin": "COM5"
 }

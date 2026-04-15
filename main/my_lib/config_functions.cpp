@@ -13,6 +13,21 @@
 #include "soc/io_mux_reg.h"
 #include "soc/gpio_reg.h"
 
+static void delete_existing_i2s_channels()
+{
+    if (mcu_rx != NULL) {
+        i2s_channel_disable(mcu_rx);
+        i2s_del_channel(mcu_rx);
+        mcu_rx = NULL;
+    }
+
+    if (mcu_tx != NULL) {
+        i2s_channel_disable(mcu_tx);
+        i2s_del_channel(mcu_tx);
+        mcu_tx = NULL;
+    }
+}
+
 void configure_spi() 
 {
     esp_err_t err;
@@ -56,6 +71,7 @@ void configure_spi()
 void configure_i2s_for_wav()
 {
 	esp_err_t err;
+    delete_existing_i2s_channels();
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
 	// chan_cfg.dma_desc_num = 16;
 	// chan_cfg.dma_frame_num = 512;
@@ -90,6 +106,7 @@ void configure_i2s_for_wav()
 void configure_i2s_for_audio(bool bluetooth)
 {
 	esp_err_t err;
+    delete_existing_i2s_channels();
 	i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
 	chan_cfg.dma_desc_num = 16;
 	chan_cfg.dma_frame_num = 512;
