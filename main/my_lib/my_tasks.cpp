@@ -56,6 +56,8 @@ void vPlay_WAV_task(void* args)
 {	
     wav_playback_active = true;
     bool resume_bt_after_play = false;
+    bool playback_failed = false;
+    wave_reader_handle_t local_wav_hdl = NULL;
 
 	// Check status of BT module (if busy, suspend)
 	eTaskState bt_state  = eTaskGetState(bt_task);
@@ -63,8 +65,9 @@ void vPlay_WAV_task(void* args)
 
 	if (bt_state == eRunning)
 	{
-		i2s_channel_disable(mcu_rx);
-		i2s_channel_disable(mcu_tx);
+        if (mcu_rx != NULL) {
+            i2s_channel_disable(mcu_rx);
+        }
 		vTaskSuspend(bt_task);
         resume_bt_after_play = !calibration_in_progress;
 	}// else if (usb_state == eRunning)
@@ -73,13 +76,11 @@ void vPlay_WAV_task(void* args)
 	// 	vTaskSuspend(usb_task);
 	// }
 
-	configure_i2s_for_wav();
-
 	wave_header_t wav_head;
-	wav_hdl = wave_reader_open("/storage/44k_full_sweep.wav");
+	local_wav_hdl = wave_reader_open("/storage/44k_full_sweep.wav");
 			
-	if (wav_hdl == NULL) {
-		ESP_LOGE(WAV_TAG, "Unable to open read!");
+	if (local_wav_hdl == NULL) {
+		ESP_LOGE(WAV_TAG, "Unable to open WAV file");
         configure_i2s_for_audio(true);
         wav_playback_active = false;
         if (calibration_in_progress) {
@@ -93,9 +94,12 @@ void vPlay_WAV_task(void* args)
         return;
 	}
 		
-	if (wave_read_header(wav_hdl, &wav_head) != 0) {
-		ESP_LOGE(WAV_TAG, "Unable to read WAV file header!");
-        wave_reader_close(wav_hdl);
+	if (wave_read_header(local_wav_hdl, &wav_head) != 0) {
+		ESP_LOGE(WAV_TAG, "Unable to read WAV file header");
+        if (local_wav_hdl != NULL) {
+            wave_reader_close(local_wav_hdl);
+            local_wav_hdl = NULL;
+        }
         configure_i2s_for_audio(true);
         wav_playback_active = false;
         if (calibration_in_progress) {
@@ -108,10 +112,55 @@ void vPlay_WAV_task(void* args)
 		vTaskDelete(NULL);
         return;
 	}
+
+    print_wav(&wav_head);
+    const uint32_t wav_sample_rate = (wav_head.sample_rate > 0) ? wav_head.sample_rate : SAMPLE_RATE;
+    const uint32_t wav_channels = (wav_head.n_channels > 0) ? wav_head.n_channels : 1U;
+    const uint32_t wav_bytes_per_sample = (wav_head.bytes_per_sample > 0) ? wav_head.bytes_per_sample : BYTES_PER_SAMPLE;
+
+    if (wav_bytes_per_sample != 2U) {
+        ESP_LOGE(WAV_TAG, "Unsupported WAV format: expected 16-bit PCM, got %lu bytes/sample",
+                 (unsigned long)wav_bytes_per_sample);
+        if (local_wav_hdl != NULL) {
+            wave_reader_close(local_wav_hdl);
+            local_wav_hdl = NULL;
+        }
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
+        }
+        if (resume_bt_after_play) {
+            vTaskResume(bt_task);
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    const bool expand_mono_to_stereo = (wav_channels == 1U);
+    const bool stereo_output = true;
+    const size_t target_input_bytes = (size_t)((uint64_t)wav_sample_rate * TEST_DURATION * wav_channels * wav_bytes_per_sample);
+    const size_t target_output_bytes = expand_mono_to_stereo ? (target_input_bytes * 2U) : target_input_bytes;
+    const size_t max_input_chunk = expand_mono_to_stereo ? (BUFFER_BYTES / 2U) : BUFFER_BYTES;
+
+    ESP_LOGI(WAV_TAG,
+             "Playback path: file_channels=%lu, expand_mono_to_stereo=%s, target_in=%u bytes, target_out=%u bytes",
+             (unsigned long)wav_channels,
+             expand_mono_to_stereo ? "true" : "false",
+             (unsigned)target_input_bytes,
+             (unsigned)target_output_bytes);
+
+    configure_i2s_for_wav(wav_sample_rate, stereo_output);
 		
-	uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Allocate space to store data coming from BT module
-	assert(buff);	
-	size_t wrote, pos = 0;
+	uint8_t *file_buff = (uint8_t *)calloc(1, BUFFER_BYTES);
+	uint8_t *tx_buff = (uint8_t *)calloc(1, BUFFER_BYTES);
+	assert(file_buff);	
+	assert(tx_buff);
+	
+    size_t pos = 0;
+    size_t total_input_bytes = 0;
+    size_t total_output_bytes = 0;
 
     if (calibration_in_progress && sync_tasks != NULL) {
 	xEventGroupSync(
@@ -123,27 +172,50 @@ void vPlay_WAV_task(void* args)
     }
 
 	uint32_t t_start = esp_log_timestamp();
-	while (1)
+	while (total_input_bytes < target_input_bytes)
 	{
-		size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);		// Read from WAV file
+        size_t input_left = target_input_bytes - total_input_bytes;
+        size_t read_size = (input_left < max_input_chunk) ? input_left : max_input_chunk;
+		size_t bytes_read = wave_read_raw_data(local_wav_hdl, file_buff, pos, read_size);
 			
 		if (bytes_read == 0){
 			break;
 		}
 			
 		pos += bytes_read;
-		size_t bytes_to_w = bytes_read;
-		uint8_t *p = buff;
+        total_input_bytes += bytes_read;
+
+        uint8_t *write_ptr = file_buff;
+        size_t write_size = bytes_read;
+
+        if (expand_mono_to_stereo) {
+            size_t sample_count = bytes_read / sizeof(int16_t);
+            int16_t *src = (int16_t *)file_buff;
+            int16_t *dst = (int16_t *)tx_buff;
+
+            for (size_t i = 0; i < sample_count; ++i) {
+                dst[(i * 2U) + 0U] = src[i];
+                dst[(i * 2U) + 1U] = src[i];
+            }
+
+            write_ptr = tx_buff;
+            write_size = sample_count * FRAME_SIZE_BYTES;
+        }
+
+		size_t bytes_to_w = write_size;
+		uint8_t *p = write_ptr;
 			
 		while (bytes_to_w > 0) {
-			wrote = 0;
-			uint32_t elapsed   = esp_log_timestamp() - t_start;
-			uint32_t remaining = (elapsed < 5000) ? (5000 - elapsed) : 0;
-
-			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, pdMS_TO_TICKS(remaining));
+			size_t wrote = 0;
+			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY);
 
             if (r != ESP_OK){
-                ESP_LOGE(WAV_TAG, "i2s_channel_write failed: %s", esp_err_to_name(r));
+                ESP_LOGE(WAV_TAG, "i2s_channel_write failed after %u ms, input=%u bytes, output=%u bytes: %s",
+                         (unsigned)(esp_log_timestamp() - t_start),
+                         (unsigned)total_input_bytes,
+                         (unsigned)total_output_bytes,
+                         esp_err_to_name(r));
+                playback_failed = true;
                 if (calibration_in_progress) {
                     ble_send_app_message("CAL_FAILED");
                     calibration_in_progress = false;
@@ -157,16 +229,30 @@ void vPlay_WAV_task(void* args)
 			}
 			bytes_to_w -= wrote;
 			p += wrote;
+            total_output_bytes += wrote;
 		}// end of inner while loop
+
+        if (playback_failed) {
+            break;
+        }
 			
 	}// end of main while loop 
 	uint32_t t_end = esp_log_timestamp();
 
-	ESP_LOGI(WAV_TAG, "Started: %u | Finished %u", t_start, t_end);
+	ESP_LOGI(WAV_TAG, "Started: %u | Finished %u | Read %u / %u bytes | Wrote %u / %u bytes",
+             t_start,
+             t_end,
+             (unsigned)total_input_bytes,
+             (unsigned)target_input_bytes,
+             (unsigned)total_output_bytes,
+             (unsigned)target_output_bytes);
 		
-	i2s_channel_disable(mcu_tx);
-	wave_reader_close(wav_hdl);	// close wav file
-	free(buff);
+	if (local_wav_hdl != NULL) {
+        wave_reader_close(local_wav_hdl);
+        local_wav_hdl = NULL;
+    }	// close wav file
+	free(file_buff);
+    free(tx_buff);
 
     configure_i2s_for_audio(true);
 
@@ -176,6 +262,7 @@ void vPlay_WAV_task(void* args)
     }
 	vTaskDelete(NULL);
 }
+
 
 void vUSB_playback_task(void *arg)
 {

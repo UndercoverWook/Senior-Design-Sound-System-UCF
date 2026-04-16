@@ -13,7 +13,7 @@ extern "C" {
 void configure_spi();
 
 // Configure I2S protocol for external WAV playback
-void configure_i2s_for_wav();
+void configure_i2s_for_wav(uint32_t sample_rate_hz, bool stereo_output);
 
 // Configure I2S protocol for audio streaming (BM83 or USB Audio)
 void configure_i2s_for_audio(bool bluetooth);

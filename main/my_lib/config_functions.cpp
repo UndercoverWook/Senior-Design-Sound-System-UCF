@@ -16,13 +16,19 @@
 static void delete_existing_i2s_channels()
 {
     if (mcu_rx != NULL) {
-        i2s_channel_disable(mcu_rx);
+        esp_err_t err = i2s_channel_disable(mcu_rx);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(I2S_TAG, "RX channel disable returned: %s", esp_err_to_name(err));
+        }
         i2s_del_channel(mcu_rx);
         mcu_rx = NULL;
     }
 
     if (mcu_tx != NULL) {
-        i2s_channel_disable(mcu_tx);
+        esp_err_t err = i2s_channel_disable(mcu_tx);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(I2S_TAG, "TX channel disable returned: %s", esp_err_to_name(err));
+        }
         i2s_del_channel(mcu_tx);
         mcu_tx = NULL;
     }
@@ -68,27 +74,38 @@ void configure_spi()
 
 }
 
-void configure_i2s_for_wav()
+void configure_i2s_for_wav(uint32_t sample_rate_hz, bool stereo_output)
 {
-	esp_err_t err;
+    esp_err_t err;
     delete_existing_i2s_channels();
+
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-	// chan_cfg.dma_desc_num = 16;
-	// chan_cfg.dma_frame_num = 512;
+    chan_cfg.dma_desc_num = 16;
+    chan_cfg.dma_frame_num = 512;
 
     err = i2s_new_channel(&chan_cfg, &mcu_tx, NULL);
-	
-	if (err != ESP_OK) {
-		ESP_LOGE(I2S_TAG, "Unable to initialize I2S channel, ERROR: %s", esp_err_to_name(err));
-		return;
-	}
-    
-    i2s_std_clk_config_t clk_config = I2S_STD_CLK_DEFAULT_CONFIG(SAMPLE_RATE);
-    clk_config.mclk_multiple = I2S_MCLK_MULTIPLE_128;
+    if (err != ESP_OK) {
+        ESP_LOGE(I2S_TAG, "Unable to initialize I2S channel, ERROR: %s", esp_err_to_name(err));
+        return;
+    }
+
+    if (sample_rate_hz == 0) {
+        sample_rate_hz = SAMPLE_RATE;
+    }
+
+    i2s_std_clk_config_t clk_config = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate_hz);
+    clk_config.clk_src = I2S_CLK_SRC_DEFAULT;
+    clk_config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+
+    i2s_slot_mode_t slot_mode = stereo_output ? I2S_SLOT_MODE_STEREO : I2S_SLOT_MODE_MONO;
+    i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, slot_mode);
+    if (!stereo_output) {
+        slot_cfg.slot_mask = I2S_STD_SLOT_LEFT;
+    }
 
     i2s_std_config_t std_cfg = {
         .clk_cfg = clk_config,
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .slot_cfg = slot_cfg,
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
             .bclk = I2S_BIT_CLK,
@@ -98,37 +115,41 @@ void configure_i2s_for_wav()
         },
     };
 
-	// Initialize standard sender channel only
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &std_cfg));
-    ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));	// Enable I2S channel for transmission
+    ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
+
+    ESP_LOGI(I2S_TAG,
+             "WAV I2S configured: fs=%lu Hz, slot_mode=%s, bit_width=16",
+             (unsigned long)sample_rate_hz,
+             stereo_output ? "stereo" : "mono");
 }
 
 void configure_i2s_for_audio(bool bluetooth)
 {
-	esp_err_t err;
+    esp_err_t err;
     delete_existing_i2s_channels();
-	i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-	chan_cfg.dma_desc_num = 16;
-	chan_cfg.dma_frame_num = 512;
-	
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    chan_cfg.dma_desc_num = 16;
+    chan_cfg.dma_frame_num = 512;
+
     if (bluetooth){
         err = i2s_new_channel(&chan_cfg, &mcu_tx, &mcu_rx);
     } else {
-	    err = i2s_new_channel(&chan_cfg, &mcu_tx, NULL);
+        err = i2s_new_channel(&chan_cfg, &mcu_tx, NULL);
     }
-	
-	if (err != ESP_OK) {
-		ESP_LOGE(I2S_TAG, "Unable to initialize I2S channel, ERROR: %s", esp_err_to_name(err));
-		return;
-	}
-	
-	i2s_std_clk_config_t clk_config = I2S_STD_CLK_DEFAULT_CONFIG(48000);
-	clk_config.clk_src = I2S_CLK_SRC_DEFAULT;
-	clk_config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
-	i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+    if (err != ESP_OK) {
+        ESP_LOGE(I2S_TAG, "Unable to initialize I2S channel, ERROR: %s", esp_err_to_name(err));
+        return;
+    }
 
-	// 2. CONFIG FOR TX (Output to DAC)
+    i2s_std_clk_config_t clk_config = I2S_STD_CLK_DEFAULT_CONFIG(48000);
+    clk_config.clk_src = I2S_CLK_SRC_DEFAULT;
+    clk_config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+
+    i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+
+    // 2. CONFIG FOR TX (Output to DAC)
     i2s_std_config_t tx_std_cfg = {
         .clk_cfg = clk_config,
         .slot_cfg = slot_cfg,
@@ -148,13 +169,13 @@ void configure_i2s_for_audio(bool bluetooth)
             .mclk = I2S_GPIO_UNUSED,
             .bclk = I2S_BIT_CLK,
             .ws   = I2S_LRCLK_PIN,
-            .dout = I2S_GPIO_UNUSED, 
+            .dout = I2S_GPIO_UNUSED,
             .din  = I2S_RX_LINE,
         },
     };
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &tx_std_cfg));
-	ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
+    ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
     if (bluetooth) {
         ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &rx_std_cfg));
         ESP_ERROR_CHECK(i2s_channel_enable(mcu_rx));
@@ -163,29 +184,29 @@ void configure_i2s_for_audio(bool bluetooth)
 
 void configure_spiffs()
 {
-	esp_err_t err;
-	
-	esp_vfs_spiffs_conf_t spiffs_cfg = {
-		.base_path 				= "/storage",
-		.partition_label 		= NULL,
-		.max_files		 		= 4,
-		.format_if_mount_failed = true
-	};
-	
-	err = esp_vfs_spiffs_register(&spiffs_cfg);
-	
-	if (err != ESP_OK) {
-		ESP_LOGE(STORAGE_TAG, "Unable to mount SPIFFS, ERROR: %s", esp_err_to_name(err));
-		return;
-	}
+    esp_err_t err;
+
+    esp_vfs_spiffs_conf_t spiffs_cfg = {
+        .base_path               = "/storage",
+        .partition_label         = NULL,
+        .max_files               = 4,
+        .format_if_mount_failed  = true
+    };
+
+    err = esp_vfs_spiffs_register(&spiffs_cfg);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(STORAGE_TAG, "Unable to mount SPIFFS, ERROR: %s", esp_err_to_name(err));
+        return;
+    }
 }
 
 void configure_psram()
 {
-	esp_err_t psram_err = esp_psram_init();
-	if (psram_err != ESP_OK){
-		ESP_LOGE(STORAGE_TAG, "Unable to initialize External PSRAM, ERROR: %s", esp_err_to_name(psram_err));
-	}
+    esp_err_t psram_err = esp_psram_init();
+    if (psram_err != ESP_OK){
+        ESP_LOGE(STORAGE_TAG, "Unable to initialize External PSRAM, ERROR: %s", esp_err_to_name(psram_err));
+    }
 }
 
 void initialize_pacer_timer(gptimer_handle_t *t)
@@ -203,13 +224,13 @@ void initialize_pacer_timer(gptimer_handle_t *t)
 void reconfigure_wdt()
 {
     esp_task_wdt_config_t twdt_cfg = {
-	    .timeout_ms = 15000,   			// give margin during 5 s capture
-	    .idle_core_mask = (1 << CORE0), // watch only CPU0 idle task
-	    .trigger_panic = true,
-	};
+        .timeout_ms = 15000,
+        .idle_core_mask = (1 << CORE0),
+        .trigger_panic = true,
+    };
 
-	esp_err_t twdt_err = esp_task_wdt_reconfigure(&twdt_cfg);
-	if (twdt_err != ESP_OK) {
-	    ESP_LOGW("TWDT", "TWDT reconfigure failed: %s", esp_err_to_name(twdt_err));
-	}
+    esp_err_t twdt_err = esp_task_wdt_reconfigure(&twdt_cfg);
+    if (twdt_err != ESP_OK) {
+        ESP_LOGW("TWDT", "TWDT reconfigure failed: %s", esp_err_to_name(twdt_err));
+    }
 }
