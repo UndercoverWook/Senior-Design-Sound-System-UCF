@@ -4,6 +4,7 @@
 #include "auto_eq_help.h"
 #include "config_functions.h"
 #include "my_usb_device.h"
+#include "ble_control.h"
 
 
 void vSample_task(void *args)
@@ -45,6 +46,7 @@ void vSample_task(void *args)
     (void)fir_taps;
 
     calibration_in_progress = false;
+    ble_send_app_message("CAL_DONE");
 	vTaskResume(bt_task);	// Resume once FIR coefficients are calculated
 
     vTaskDelete(NULL);  // Delete the task when done
@@ -82,11 +84,13 @@ void vPlay_WAV_task(void* args)
         wav_playback_active = false;
         if (calibration_in_progress) {
             calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
         }
         if (resume_bt_after_play) {
             vTaskResume(bt_task);
         }
 		vTaskDelete(NULL);
+        return;
 	}
 		
 	if (wave_read_header(wav_hdl, &wav_head) != 0) {
@@ -96,11 +100,13 @@ void vPlay_WAV_task(void* args)
         wav_playback_active = false;
         if (calibration_in_progress) {
             calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
         }
         if (resume_bt_after_play) {
             vTaskResume(bt_task);
         }
 		vTaskDelete(NULL);
+        return;
 	}
 		
 	uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Allocate space to store data coming from BT module
@@ -134,12 +140,16 @@ void vPlay_WAV_task(void* args)
 			uint32_t elapsed   = esp_log_timestamp() - t_start;
 			uint32_t remaining = (elapsed < 5000) ? (5000 - elapsed) : 0;
 
-			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, pdMS_TO_TICKS(remaining));	
-				
-			if (r != ESP_OK){
+			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, pdMS_TO_TICKS(remaining));
+
+            if (r != ESP_OK){
                 ESP_LOGE(WAV_TAG, "i2s_channel_write failed: %s", esp_err_to_name(r));
-				break;
-			}
+                if (calibration_in_progress) {
+                    ble_send_app_message("CAL_FAILED");
+                    calibration_in_progress = false;
+                }
+                break;
+            }
 				
 			if (wrote == 0) {
 				vTaskDelay(pdMS_TO_TICKS(1));

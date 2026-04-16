@@ -48,6 +48,7 @@ static const ble_uuid128_t tx_char_uuid =
 static void ble_start_advertising(void);
 static void ble_send_text_notification(const char *text);
 static void ble_send_placeholder_histogram(void);
+static void ble_start_calibration_from_app(void);
 static void ble_handle_app_command(const char *cmd);
 
 static int ble_gatt_access_cb(uint16_t conn_handle,
@@ -116,6 +117,25 @@ static void ble_send_placeholder_histogram(void)
     ble_send_text_notification("FFT:0,0,0,0,0,0,0,0");
 }
 
+void ble_send_app_message(const char *text)
+{
+    ble_send_text_notification(text);
+}
+
+static void ble_start_calibration_from_app(void)
+{
+    if (calibration_in_progress || wav_playback_active) {
+        ble_send_text_notification("BUSY:CALIBRATION");
+        ESP_LOGW(BLE_TAG, "Calibration request ignored because audio is already active");
+        return;
+    }
+
+    ble_histogram_enabled = true;
+    ble_send_placeholder_histogram();
+    ble_send_text_notification("ACK:AUTO_EQ_START");
+    play_and_sample();
+}
+
 void ble_publish_fft_bins_from_complex(const float *fft_complex, float sample_rate)
 {
     if (!ble_histogram_enabled || fft_complex == NULL || sample_rate <= 0.0f) {
@@ -161,6 +181,11 @@ static void ble_handle_app_command(const char *cmd)
 
     ESP_LOGI(BLE_TAG, "App command: %s", cmd);
 
+    if (strcmp(cmd, "AUTO_EQ_START") == 0) {
+        ble_start_calibration_from_app();
+        return;
+    }
+
     if (strcmp(cmd, "PLAY_WAV") == 0) {
         if (calibration_in_progress || wav_playback_active) {
             ESP_LOGW(BLE_TAG, "Ignoring PLAY_WAV while audio task is active");
@@ -180,19 +205,13 @@ static void ble_handle_app_command(const char *cmd)
         if (rc != pdPASS) {
             wav_playback_active = false;
             ESP_LOGE(BLE_TAG, "Failed to create WAV playback task");
+            ble_send_text_notification("ERR:PLAY_WAV");
         }
         return;
     }
 
     if (strcmp(cmd, "HIST_ON") == 0) {
-        ble_histogram_enabled = true;
-        ble_send_placeholder_histogram();
-
-        if (!calibration_in_progress && !wav_playback_active) {
-            play_and_sample();
-        } else {
-            ESP_LOGW(BLE_TAG, "Calibration request ignored because audio is already active");
-        }
+        ble_start_calibration_from_app();
         return;
     }
 

@@ -14,6 +14,9 @@ void ble_control_init(void);
 // fft_complex is the interleaved complex FFT buffer returned by compute_fft().
 void ble_publish_fft_bins_from_complex(const float *fft_complex, float sample_rate);
 
+// Send a plain-text status message back to the Flutter app.
+void ble_send_app_message(const char *text);
+
 #ifdef __cplusplus
 }
 #endif
