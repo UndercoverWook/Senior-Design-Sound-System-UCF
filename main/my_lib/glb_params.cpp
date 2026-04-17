@@ -17,6 +17,7 @@ TaskHandle_t         bt_task       = NULL;
 TaskHandle_t         usb_task      = NULL;
 RingbufHandle_t      audio_ringbuf = NULL;
 EventGroupHandle_t   sync_tasks    = NULL;
+fir_f32_t global_eq;
 
 float cal_values[256][2]    = {};
 bool activate_eq = false;

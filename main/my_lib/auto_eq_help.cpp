@@ -29,11 +29,12 @@ void show_FFT(float *fft_avg, int num_bins, float sample_rate)
     for (int i = 0; i < num_bins; i++) {
         float freq_hz = (float)i * sample_rate / FFT_SIZE;
 
-        float real    = fft_avg[i * 2 + 0];          // Real part of bin i
-        float imag    = fft_avg[i * 2 + 1];          // Imaginary part of bin i
+        float real    = fft_avg[i * 2 + 0];          // Real part of bin
+        float imag    = fft_avg[i * 2 + 1];          // Imaginary part of bin
         float mag     = sqrtf(real * real + imag * imag);  // True magnitude
 
         float mag_db  = 20.0f * log10f(mag + 1e-9f); // Now always >= 0, no NaN
+        if (freq_hz > 20100.0f) break;
 
         ESP_LOGI(EQ_TAG, "Frequency: %8.2f Hz  |  Magnitude: %.4f dB", freq_hz, mag_db);
     }
@@ -151,12 +152,12 @@ void apply_calibration_to_fft(float *fft_acc, float sample_rate)
     }
 }
 
-float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
+float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool d_signed)
 { 
     // Allocate buffers for FFT processing and preprocessing
     float *y_cf       = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float) * 2, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     float *wind_coeff = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float),     MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
-    float *fft_acc    = (float *)heap_caps_malloc(FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_INTERNAL);
+    float *fft_acc    = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float)* 2, MALLOC_CAP_INTERNAL);
 
     if (!y_cf || !wind_coeff || !fft_acc) {
         ESP_LOGE(EQ_TAG, "FFT buffer alloc failed! y_cf=%p wind=%p fft_acc=%p", y_cf, wind_coeff, fft_acc);
@@ -177,7 +178,6 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
         uint16_t *chunk_start = samples + i * hop;
 
         for (int j = 0; j < FFT_SIZE; j++) {
-           // int16_t signed_sample = (int16_t)chunk_start[j];
             y_cf[j*2 + 0] = ((chunk_start[j] - 32768.0f) / 32768.0f) * wind_coeff[j]; // Normalize for 16-bit (1.5V bias)
             y_cf[j*2 + 1] = 0.0f;                                       // Real signal so imaginary part is zero
         }
@@ -191,12 +191,11 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate)
             fft_acc[k*2 + 0] += y_cf[k*2 + 0];  // real
             fft_acc[k*2 + 1] += y_cf[k*2 + 1];  // imaginary
         }
-    }
 
-    // Average across all chunks
-    if (num_chunks > 0) {
-        for (int k = 0; k < FFT_SIZE * 2; k++) {
-            fft_acc[k] /= num_chunks;
+         if (num_chunks > 0) {
+            for (int k = 0; k < FFT_SIZE * 2; k++) {
+                fft_acc[k] /= num_chunks;
+            }
         }
     }
 
@@ -235,16 +234,16 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
 
     // Make wav file to FFT
     float *wav_fft = wav_to_fft();
+    show_FFT(wav_fft, NUM_BINS, SAMPLE_RATE);
 
     // Load calibration file to array before applying calibration
     emm6_file_to_arr();
 
-    float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq);   // Apply calibration to get "true" magnitudes
+    float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq, false);   // Apply calibration to get "true" magnitudes
     free(samples);
     
     // Apply calibration to samples FFT
     apply_calibration_to_fft(sample_fft, actual_freq);
-    show_FFT(sample_fft, NUM_BINS, actual_freq);
 
     // Compute Wiener deconvolution on the magnitudes
     float *H = compute_wiener_deconvolution(wav_fft, sample_fft, FFT_SIZE);
@@ -252,8 +251,6 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     // Calculate correction curve based on Target Curve (1.0 across all bins)
     // and the computed H (system response) using Wiener deconvolution
     float *correction_curve = calculate_correction_curve(H, FFT_SIZE);
-    free(sample_fft);
-    free(wav_fft);
 
     // Turn correction curve into FIR filter coefficients (IFFT)
     correction_ifft(correction_curve, FFT_SIZE);
@@ -280,7 +277,7 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     }
 
     free(window);
-    free(correction_curve);
+    //free(correction_curve);
     
     // Normalize final taps for FIR design
     normalize_taps(final_taps);
@@ -290,7 +287,7 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     //     vTaskDelay(pdMS_TO_TICKS(10));          // Feed the Watchdog
     // }
 
-    dsps_fft2r_deinit_fc32();
+    //dsps_fft2r_deinit_fc32();
 
     return final_taps;
 }

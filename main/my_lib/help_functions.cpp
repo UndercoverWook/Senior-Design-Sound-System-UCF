@@ -9,6 +9,8 @@
 #include "glb_params.h"
 #include "auto_eq_help.h"
 #include "my_tasks.h"
+#include "dsps_biquad_gen.h"
+#include "dsps_biquad.h"
 #include <math.h>
 
 void bm83_tx_ind_init(void) {
@@ -58,7 +60,6 @@ void emm6_file_to_arr()
 	
 	return;
 }// end of file_to_arr function
-
 
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
 {
@@ -135,9 +136,11 @@ float* load_fft_cache(int num_bins)
 float* wav_to_fft()
 {
     uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    ESP_LOGI(WAV_TAG, "Reading WAV file...");
     int count = load_wav_to_array("/storage/stereo_sweep.wav", samples, N_SAMPLES);
+    ESP_LOGI(WAV_TAG, "Loaded %d samples. Running FFT now...", count);
 
-    float* wav_fft = compute_fft(samples, count, SAMPLE_RATE);
+    float* wav_fft = compute_fft(samples, count, SAMPLE_RATE, true);
     free(samples);
 
     return wav_fft;
@@ -146,6 +149,15 @@ float* wav_to_fft()
 void play_and_sample()
 {
     sync_tasks = xEventGroupCreate();
-    xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE0);
-    xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
+    xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", STACK_DEPTH, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
+    xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", STACK_DEPTH * 2, NULL, configMAX_PRIORITIES - 1, NULL, CORE0);    
+    xEventGroupWaitBits(sync_tasks, ALL_TASKS_DONE, pdFALSE, pdTRUE, portMAX_DELAY);
+    vEventGroupDelete(sync_tasks);
+}
+
+void init_eq(float sample_rate) {
+    
+    for (int i = 0; i < EQ_BANDS; i++) {
+        dsps_biquad_gen_peakingEQ_f32(&eq_coeffs[i * 5], eq_freqs[i] / sample_rate, 0.0);
+    }
 }

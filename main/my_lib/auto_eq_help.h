@@ -15,7 +15,7 @@ void show_FFT(float *y_cf, int n, float sample_rate);
 float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq);
 
 // Function to compute the FFT and print the calibrated magnitude values
-float* compute_fft(uint16_t *samples, int num_samples, float sample_rate);
+float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool d_signed);
 
 // Function to apply EMM6 calibration to the raw magnitude values by interpolation
 float apply_emm6_calibration(float freq_hz);

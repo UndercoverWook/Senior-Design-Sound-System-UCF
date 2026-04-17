@@ -13,10 +13,8 @@ extern "C" void app_main(void)
     configure_spiffs();
     reconfigure_wdt();
 
-    xTaskCreatePinnedToCore(vBT_playback_task, "BT Playback", 8192, NULL, 5, &bt_task, CORE1);
-
-    vTaskDelay(pdMS_TO_TICKS(20000));   // wait 20 seconds and then start calibration
+    //xTaskCreatePinnedToCore(vBT_playback_task, "BT Playback", STACK_DEPTH, NULL, 20, &bt_task, CORE1);
+    //xTaskCreate(vUSB_playback_task, "USB Playback", STACK_DEPTH, NULL, 10, &usb_task); // Give USB less priority
 
     play_and_sample();
-    // xTaskCreatePinnedToCore(vUSB_playback_task, "USB Playback", 8192, NULL, 10, &usb_task, CORE0); // Give USB less priority
 }

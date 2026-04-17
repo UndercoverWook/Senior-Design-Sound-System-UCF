@@ -75,6 +75,6 @@ direct_dependencies:
 - espressif/usb_device_uac
 - idf
 - mateusglucas/wave
-manifest_hash: c7a6b30f00ba005fa812c497a6f46fa91a9a34478af6e31901a7ed267e1e3ddd
+manifest_hash: 7b5a414e55d9b5bd6435fade213741ff966709ff7fd064aaee7df09e67fbb0f9
 target: esp32s3
 version: 2.0.0

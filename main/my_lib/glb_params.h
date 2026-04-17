@@ -50,7 +50,7 @@ extern "C" {
 // General parameters
 #define SAMPLE_RATE		 44100								 // Sample rate, 44.1kHz enough to avoid undersampling but 48kHz is cleaner
 #define TEST_DURATION	 5									 // Duration of Test Signal
-#define BUFFER_FRAMES  	 4096            					 // frames (stereo frames) captured and transmitted 
+#define BUFFER_FRAMES  	 2048            					 // frames (stereo frames) captured and transmitted 
 #define BYTES_PER_SAMPLE 2               					 // 16-bit => 2 bytes per channel sample
 #define CHANNELS         2									 // Stereo = 2 || Mono = 1
 #define FRAME_SIZE_BYTES (BYTES_PER_SAMPLE * CHANNELS)  	 // 4 bytes per frame (16-bit stereo)
@@ -66,9 +66,18 @@ extern "C" {
 #define TRANSACTION_LENGTH 16             // 16 bits per sample from ADC
 #define N_SAMPLES		 (SAMPLE_RATE * TEST_DURATION)  // Number of samples to capture for testing (1 second worth of data at 48kHz)
 #define FFT_CACHE_PATH   "/storage/fft_cache.bin"
-#define TASK_A_READY_BIT  BIT0
-#define TASK_B_READY_BIT  BIT1
+#define TASK_A_READY_BIT  (1 << 0)
+#define TASK_B_READY_BIT  (1 << 1)
+#define TASK_A_DONE_BIT   (1 << 2)
+#define TASK_B_DONE_BIT   (1 << 3)
 #define ALL_TASKS_READY   (TASK_A_READY_BIT | TASK_B_READY_BIT)
+#define ALL_TASKS_DONE    (TASK_A_DONE_BIT  | TASK_B_DONE_BIT)
+#define EQ_BANDS 8
+
+float eq_freqs[EQ_BANDS] = {60, 250, 500, 1000, 2000, 4000, 8000, 16000};
+float eq_coeffs[EQ_BANDS * 5];          // 5 coeffs per band
+float delay_l[EQ_BANDS * 2] = {0};      // 2 delays per band for Left
+float delay_r[EQ_BANDS * 2] = {0};
 
 // GPIOs Declarations
 static const gpio_num_t MCU_WAKE	 	= GPIO_NUM_1;		// Wake up the MCU
@@ -101,11 +110,11 @@ extern TaskHandle_t 		bt_task;		// Task 1 handle
 extern TaskHandle_t 		usb_task;		// Task 2 handle
 extern RingbufHandle_t 	    audio_ringbuf;	// Ring buffer handle for audio data between USB and I2S tasks
 extern EventGroupHandle_t   sync_tasks;     // Synchronization mechanism for concurrent tasks
-extern fir_f32_s            global_eq;
+extern fir_f32_t            global_eq;
 
 // Function helpers:
 extern float cal_values [256][2];			// To store calibration values as a pair of values in a 2D array fashion
-static const uint32_t STACK_DEPTH = 4096;	// Stack allocation for FreeRTOS Tasks
+static const uint32_t STACK_DEPTH = 8192;	// Stack allocation for FreeRTOS Tasks
 extern bool activate_eq;                    // Global flag to indicate whether to apply EQ or not 
 
 // TAGS:

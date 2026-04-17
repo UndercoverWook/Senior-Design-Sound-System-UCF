@@ -37,6 +37,8 @@ void play_and_sample();
 // Function to load the WAV file and convert it to an array of samples
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples);
 
+// Function to initialize the Biquad filters for 8-band Filter 
+void init_eq(float sample_rate);
 
 #ifdef __cplusplus
 }
