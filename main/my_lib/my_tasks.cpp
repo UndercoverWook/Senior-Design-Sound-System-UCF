@@ -174,9 +174,9 @@ void vBT_playback_task(void *arg)
 
 	ESP_LOGI(BM83_TAG, "BM83 Transmitting!");
 	configure_i2s_for_audio(true);
-	init_eq(48000.0f);
+	//init_eq(48000.0f);
 
-	uint8_t *bt_buff = (uint8_t *)heap_caps_malloc(BUFFER_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);	// Initialize array to store data coming from BT module
+	uint8_t *bt_buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Initialize array to store data coming from BT module
 	assert(bt_buff);	
 	
 	size_t bytes_read;
@@ -192,24 +192,24 @@ void vBT_playback_task(void *arg)
 	gpio_config_t io_conf = {
 		.pin_bit_mask = (1ULL << GPIO_NUM_2),
 		.mode 		  = GPIO_MODE_INPUT,
-		.pull_up_en   = GPIO_PULLUP_ENABLE,
+		.pull_up_en   = GPIO_PULLUP_DISABLE,
 		.pull_down_en = GPIO_PULLDOWN_DISABLE,
 		.intr_type    = GPIO_INTR_DISABLE,
 	};
 	gpio_config(&io_conf);
 
-	float *left_float = (float *)heap_caps_aligned_alloc(16, (BUFFER_BYTES / 4) * sizeof(float), MALLOC_CAP_INTERNAL);
-	float *right_float = (float *)heap_caps_aligned_alloc(16, (BUFFER_BYTES / 4) * sizeof(float), MALLOC_CAP_INTERNAL);
+	//float *left_float = (float *)heap_caps_aligned_alloc(16, (BUFFER_BYTES / 4) * sizeof(float), MALLOC_CAP_INTERNAL);
+	//float *right_float = (float *)heap_caps_aligned_alloc(16, (BUFFER_BYTES / 4) * sizeof(float), MALLOC_CAP_INTERNAL);
 
 	// Read bytes from the Bluetooth Module (MCU acts as Receiver) and echo/send it to the DAC (MCU acts as Sender)
 	while (1)
 	{
 		esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);
-		ESP_LOGI("BM83", "Read %d bytes", bytes_read);
+		//ESP_LOGI("BM83", "Read %d bytes", bytes_read);
 		
 		size_t bytes_to_w = bytes_read;
 		uint8_t *p = bt_buff;
-		if (bytes_read > 0) {
+		/*if (bytes_read > 0) {
 			int16_t *raw_samples = (int16_t *)bt_buff;
 			int samples_per_channel = bytes_read / 4;
 
@@ -232,12 +232,17 @@ void vBT_playback_task(void *arg)
 				raw_samples[i * 2] = (int16_t)((l > 32767) ? 32767 : (l < -32768) ? -32768 : l);
 				raw_samples[i * 2 + 1] = (int16_t)((r > 32767) ? 32767 : (r < -32768) ? -32768 : r);
 			}
-		}
+		}*/
 		
 		while (bytes_to_w > 0)
 		{			
 			ESP_ERROR_CHECK(i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY));
-			ESP_LOGI("BM83", "Wrote %d bytes", wrote);
+			
+			if (wrote == 0) 
+			{ 
+				vTaskDelay(pdMS_TO_TICKS(1)); 
+				continue; 
+			}	
 			bytes_to_w -= wrote;		// If written -> OK, then decrease counter
 			p += wrote;					// Increase pointer to buffer	
 		}// end of inner while loop

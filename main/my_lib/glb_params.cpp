@@ -21,6 +21,10 @@ fir_f32_t global_eq;
 
 float cal_values[256][2]    = {};
 bool activate_eq = false;
+float eq_freqs[EQ_BANDS] = {60, 250, 500, 1000, 2000, 4000, 8000, 16000};
+float eq_coeffs[EQ_BANDS * 5];          // 5 coeffs per band
+float delay_l[EQ_BANDS * 2] = {0};      // 2 delays per band for Left
+float delay_r[EQ_BANDS * 2] = {0};
 
 const char *STORAGE_TAG  = "File System";
 const char *SPI_TAG      = "SPI Configuration";

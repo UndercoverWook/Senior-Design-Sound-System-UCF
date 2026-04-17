@@ -106,7 +106,7 @@ void configure_i2s_for_audio(bool bluetooth)
     if (bluetooth) {
 	    slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     } else {
-        slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+        slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     }
 
 	// 2. CONFIG FOR TX (Output to DAC)
@@ -118,26 +118,26 @@ void configure_i2s_for_audio(bool bluetooth)
             .bclk = I2S_BIT_CLK,
             .ws   = I2S_LRCLK_PIN,
             .dout = I2S_TX_LINE,
-            .din  = I2S_GPIO_UNUSED,
-        },
-    };
-
-    i2s_std_config_t rx_std_cfg = {
-        .clk_cfg = clk_config,
-        .slot_cfg = slot_cfg,
-        .gpio_cfg = {
-            .mclk = I2S_GPIO_UNUSED,
-            .bclk = I2S_BIT_CLK,
-            .ws   = I2S_LRCLK_PIN,
-            .dout = I2S_GPIO_UNUSED, 
             .din  = I2S_RX_LINE,
         },
     };
 
+    // i2s_std_config_t rx_std_cfg = {
+    //     .clk_cfg = clk_config,
+    //     .slot_cfg = slot_cfg,
+    //     .gpio_cfg = {
+    //         .mclk = I2S_GPIO_UNUSED,
+    //         .bclk = I2S_BIT_CLK,
+    //         .ws   = I2S_LRCLK_PIN,
+    //         .dout = I2S_GPIO_UNUSED, 
+    //         .din  = I2S_RX_LINE,
+    //     },
+    // };
+
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &tx_std_cfg));
 	ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
     if (bluetooth) {
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &rx_std_cfg));
+        ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &tx_std_cfg));
         ESP_ERROR_CHECK(i2s_channel_enable(mcu_rx));
     }
 }

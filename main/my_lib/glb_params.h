@@ -50,7 +50,7 @@ extern "C" {
 // General parameters
 #define SAMPLE_RATE		 44100								 // Sample rate, 44.1kHz enough to avoid undersampling but 48kHz is cleaner
 #define TEST_DURATION	 5									 // Duration of Test Signal
-#define BUFFER_FRAMES  	 2048            					 // frames (stereo frames) captured and transmitted 
+#define BUFFER_FRAMES  	 8192            					 // frames (stereo frames) captured and transmitted 
 #define BYTES_PER_SAMPLE 2               					 // 16-bit => 2 bytes per channel sample
 #define CHANNELS         2									 // Stereo = 2 || Mono = 1
 #define FRAME_SIZE_BYTES (BYTES_PER_SAMPLE * CHANNELS)  	 // 4 bytes per frame (16-bit stereo)
@@ -74,10 +74,10 @@ extern "C" {
 #define ALL_TASKS_DONE    (TASK_A_DONE_BIT  | TASK_B_DONE_BIT)
 #define EQ_BANDS 8
 
-float eq_freqs[EQ_BANDS] = {60, 250, 500, 1000, 2000, 4000, 8000, 16000};
-float eq_coeffs[EQ_BANDS * 5];          // 5 coeffs per band
-float delay_l[EQ_BANDS * 2] = {0};      // 2 delays per band for Left
-float delay_r[EQ_BANDS * 2] = {0};
+extern float eq_freqs[EQ_BANDS];
+extern float eq_coeffs[EQ_BANDS * 5];          // 5 coeffs per band
+extern float delay_l[EQ_BANDS * 2];     // 2 delays per band for Left
+extern float delay_r[EQ_BANDS * 2];
 
 // GPIOs Declarations
 static const gpio_num_t MCU_WAKE	 	= GPIO_NUM_1;		// Wake up the MCU
