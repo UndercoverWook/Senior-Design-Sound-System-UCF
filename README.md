@@ -1,16 +1,25 @@
-# flutter_application_1
+# Senior-Design-Sound-System-UCF
 
-A new Flutter project.
+Mobile Flutter app for the Senior Design Sound System project at UCF.
 
-## Getting Started
+## File Structure
 
-This project is a starting point for a Flutter application.
+### Main Application
+- `lib/main.dart` — app entry point, navigation, BLE connection logic, and shared state
 
-A few resources to get you started if this is your first Flutter project:
+### Pages
+- `lib/pages/home_page.dart` — home screen with Bluetooth connect/disconnect status
+- `lib/pages/control_page.dart` — main control screen with volume, EQ sliders, and histogram
+- `lib/pages/settings_page.dart` — settings screen for Bluetooth, WiFi SSID, room, and latency
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+### Widgets
+- `lib/widgets/eq_sliders.dart` — graphic EQ slider widget
+- `lib/widgets/eq_histogram.dart` — histogram widget for FFT / spectrum display
+- `lib/widgets/eq_visualizer.dart` — legacy EQ visualizer widget
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Run Instructions
+```bash
+flutter clean
+flutter pub get
+flutter run -d chrome
+```
