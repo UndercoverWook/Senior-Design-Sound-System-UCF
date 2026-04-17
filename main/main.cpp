@@ -12,9 +12,13 @@ extern "C" void app_main(void)
     configure_psram();
     configure_spiffs();
     reconfigure_wdt();
+    configure_i2s();
 
-    //xTaskCreatePinnedToCore(vBT_playback_task, "BT Playback", STACK_DEPTH, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
-    xTaskCreate(vUSB_playback_task, "USB Playback", STACK_DEPTH, NULL, 5, &usb_task); // Give USB less priority
+    xTaskCreate(vUSB_playback_task, "USB Playback", STACK_DEPTH, NULL, 5, &usb_task);
 
-    //play_and_sample();
+    // play_and_sample();
+
+    // dsps_fft2r_init_fc32(NULL, FFT_SIZE);
+    // float *wav_fft = wav_to_fft();
+    // show_FFT(wav_fft, NUM_BINS, SAMPLE_RATE);
 }

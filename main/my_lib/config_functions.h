@@ -13,18 +13,13 @@ extern "C" {
 void configure_spi();
 
 // Configure I2S protocol for external WAV playback
-void configure_i2s_for_wav();
-
-// Configure I2S protocol for audio streaming (BM83 or USB Audio)
-void configure_i2s_for_audio(bool bluetooth);
+void configure_i2s();
 
 // Configure SPIFFS File System
 void configure_spiffs();
 
 // Configure external PSRAM (returns a pointer to allocated buffer for sampled data)
 void configure_psram();
-
-void initialize_pacer_timer(gptimer_handle_t *t);
 
 // Reconfigure Task Watchdog Timer to avoid false positives during long computations
 void reconfigure_wdt();

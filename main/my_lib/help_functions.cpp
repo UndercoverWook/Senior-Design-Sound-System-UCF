@@ -136,10 +136,7 @@ float* load_fft_cache(int num_bins)
 float* wav_to_fft()
 {
     uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    ESP_LOGI(WAV_TAG, "Reading WAV file...");
-    int count = load_wav_to_array("/storage/stereo_sweep.wav", samples, N_SAMPLES);
-    ESP_LOGI(WAV_TAG, "Loaded %d samples. Running FFT now...", count);
-
+    int count = load_wav_to_array("/storage/mono_sweep.wav", samples, N_SAMPLES);
     float* wav_fft = compute_fft(samples, count, SAMPLE_RATE, true);
     free(samples);
 
@@ -158,7 +155,7 @@ void play_and_sample()
 void init_eq(float sample_rate) {
     
     for (int i = 0; i < EQ_BANDS; i++) {
-        dsps_biquad_gen_peakingEQ_f32(&eq_coeffs[i * 5], eq_freqs[i] / sample_rate, 0.0);
+        dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / sample_rate, 0.0);
     }
 }
 

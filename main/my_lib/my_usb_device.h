@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+extern volatile bool flush_required;
+
 // USB UAC device callback 
 esp_err_t usb_uac_device_output_cb(uint8_t *buf, size_t len, void *arg);
 
@@ -19,6 +21,9 @@ void usb_uac_device_set_volume_cb(uint32_t _volume, void *arg);
 
 // Initializes the USB UAC device with the specified configuration
 void usb_uac_device_init(void);
+
+// Update volume level and/or mute
+void apply_volume_and_mute(int16_t *samples, size_t num_samples);
 
 
 #ifdef __cplusplus

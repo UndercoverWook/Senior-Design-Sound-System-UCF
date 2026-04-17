@@ -91,7 +91,7 @@ float* calculate_correction_curve(float *H, int n)
 
 float* compute_wiener_deconvolution(float *X, float *Y, int n) 
 {
-   float reg_factor = 0.01f;
+   float reg_factor = 0.001f;
     
     // Complex data has 2 floats per bin. Loop must go to n * 2.
     for (int i = 0; i < n * 2; i += 2) { 
@@ -205,23 +205,81 @@ float* compute_fft(uint16_t *samples, int num_samples, float sample_rate, bool d
     return fft_acc;
 }
 
-void normalize_taps(float* taps)
+void calculate_band_gains_from_H(float *H, int fft_size, float sample_rate, float *out_gains) 
 {
-    // Calculate the sum of all taps
-    float sum = 0;
-    for (int i = 0; i < FFT_SIZE; i++) {
-        sum += taps[i];
-    }
+    for (int b = 0; b < 8; b++) {
+        float low_f = eq_freqs[b] * 0.707f;
+        float high_f = eq_freqs[b] * 1.414f;
+        
+        float sum_mag = 0;
+        int count = 0;
 
-    // Normalize to unity gain (DC = 0dB)
-    if (fabsf(sum) > 1e-9f) {
-        float norm_factor = 1.0f / sum;
-        for (int i = 0; i < FFT_SIZE; i++) {
-            taps[i] *= norm_factor;
+        for (int i = 0; i < fft_size / 2; i++) {
+            float bin_freq = (float)i * sample_rate / fft_size;
+            if (bin_freq >= low_f && bin_freq <= high_f) {
+                float re = H[i * 2];
+                float im = H[i * 2 + 1];
+                sum_mag += sqrtf(re * re + im * im);
+                count++;
+            }
+        }
+
+        if (count > 0) {
+            float avg_mag = sum_mag / count;
+            // Correction Gain: If response is low (0.5), we want +6dB gain.
+            float gain_db = -20.0f * log10f(avg_mag + 1e-6f);
+            
+            // Safety Clamp for Biquads (prevents clipping)
+            if (gain_db > 12.0f) gain_db = 12.0f;
+            if (gain_db < -12.0f) gain_db = -12.0f;
+            
+            out_gains[b] = gain_db;
+        } else {
+            out_gains[b] = 0.0f;
         }
     }
 }
 
+float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
+{    
+    // Initialize FFT before running it
+    esp_err_t err = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
+    
+    // Take FFT of both WAV and samples
+    float *wav_fft = wav_to_fft();
+    emm6_file_to_arr();
+    float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq, false); 
+    free(samples);
+
+    // Apply calibration to sampled data
+    apply_calibration_to_fft(sample_fft, actual_freq);
+
+    // H represents the frequency response of the speaker/room
+    float *H = compute_wiener_deconvolution(wav_fft, sample_fft, FFT_SIZE);
+
+    // Allocate space for just 8 band gains
+    float *band_gains = (float *)heap_caps_calloc(8, sizeof(float), MALLOC_CAP_INTERNAL);
+    if (!band_gains) return NULL;
+
+    calculate_band_gains_from_H(H, FFT_SIZE, SAMPLE_RATE, band_gains);
+
+    // For debugging
+    for (int i = 0; i < EQ_BANDS; i++){
+        ESP_LOGI(EQ_TAG, "Band %d gain: %.3f", i, band_gains[i]);
+    }
+
+    // Cleanup the big buffers and De-initialize FFT
+    free(H);
+    dsps_fft2r_deinit_fc32();
+
+    return band_gains; 
+}
+
+
+
+
+
+/* Old version
 float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
 {   
     // Initialize FFT tables (must be done before calling any FFT functions) and compute FFT
@@ -290,4 +348,4 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     //dsps_fft2r_deinit_fc32();
 
     return final_taps;
-}
+}*/

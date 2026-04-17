@@ -48,8 +48,8 @@ extern "C" {
 
 
 // General parameters
-#define SAMPLE_RATE		 44100								 // Sample rate, 44.1kHz enough to avoid undersampling but 48kHz is cleaner
-#define TEST_DURATION	 5									 // Duration of Test Signal
+#define SAMPLE_RATE		 48000								 // Sample rate, 44.1kHz enough to avoid undersampling but 48kHz is cleaner
+#define TEST_DURATION	 4									 // Duration of Test Signal
 #define BUFFER_FRAMES  	 8192            					 // frames (stereo frames) captured and transmitted 
 #define BYTES_PER_SAMPLE 2               					 // 16-bit => 2 bytes per channel sample
 #define CHANNELS         2									 // Stereo = 2 || Mono = 1
@@ -75,9 +75,13 @@ extern "C" {
 #define EQ_BANDS 8
 
 extern float eq_freqs[EQ_BANDS];
-extern float eq_coeffs[EQ_BANDS * 5];          // 5 coeffs per band
-extern float delay_l[EQ_BANDS * 2];     // 2 delays per band for Left
-extern float delay_r[EQ_BANDS * 2];
+extern float eq_w[EQ_BANDS][2];   // State for 8 EQ bands
+extern float sub_lpf_w[2]; // State for Subwoofer (Left)
+extern float mid_hpf_w[2]; // State for Mids/Highs (Right)
+extern float eq_coeffs[EQ_BANDS][5]; 
+extern float lpf_coeffs[5];
+extern float hpf_coeffs[5];
+extern float app_sliders[EQ_BANDS];
 
 // GPIOs Declarations
 static const gpio_num_t MCU_WAKE	 	= GPIO_NUM_1;		// Wake up the MCU
@@ -110,7 +114,6 @@ extern TaskHandle_t 		bt_task;		// Task 1 handle
 extern TaskHandle_t 		usb_task;		// Task 2 handle
 extern RingbufHandle_t 	    audio_ringbuf;	// Ring buffer handle for audio data between USB and I2S tasks
 extern EventGroupHandle_t   sync_tasks;     // Synchronization mechanism for concurrent tasks
-extern fir_f32_t            global_eq;
 
 // Function helpers:
 extern float cal_values [256][2];			// To store calibration values as a pair of values in a 2D array fashion

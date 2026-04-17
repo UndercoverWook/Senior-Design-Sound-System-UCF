@@ -35,6 +35,9 @@ void correction_ifft(float* correction_curve, int n);
 // Normalize final taps
 void normalize_taps(float* taps);
 
+// Get Bi Quad from transfer function
+void calculate_band_gains_from_H(float *H, int fft_size, float sample_rate, float *out_gains);
+
 
 #ifdef __cplusplus
 }
