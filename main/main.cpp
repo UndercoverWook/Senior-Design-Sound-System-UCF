@@ -19,6 +19,6 @@ extern "C" void app_main(void)
 
     //vTaskDelay(pdMS_TO_TICKS(20000));   // wait 20 seconds and then start calibration
 
-    //play_and_sample();
-    // xTaskCreatePinnedToCore(vUSB_playback_task, "USB Playback", 8192, NULL, 10, &usb_task, CORE0); // Give USB less priority
+    // Do not auto-start calibration at boot. Calibration starts only from the app.
+    xTaskCreatePinnedToCore(vUSB_playback_task, "USB Playback", 8192, NULL, 10, &usb_task, CORE0); // Give USB less priority
 }

@@ -43,6 +43,13 @@ void vSample_task(void *args)
 	ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
 
     float* fir_taps = run_Auto_EQ_algorithm(samples, actual_fs);
+    if (fir_taps == NULL) {
+        calibration_in_progress = false;
+        ble_send_app_message("CAL_FAILED");
+        vTaskResume(bt_task);
+        vTaskDelete(NULL);
+        return;
+    }
     (void)fir_taps;
 
     calibration_in_progress = false;

@@ -47,7 +47,6 @@ static const ble_uuid128_t tx_char_uuid =
 
 static void ble_start_advertising(void);
 static void ble_send_text_notification(const char *text);
-static void ble_send_placeholder_histogram(void);
 static void ble_start_calibration_from_app(void);
 static void ble_handle_app_command(const char *cmd);
 
@@ -112,11 +111,6 @@ static void ble_send_text_notification(const char *text)
     }
 }
 
-static void ble_send_placeholder_histogram(void)
-{
-    ble_send_text_notification("FFT:0,0,0,0,0,0,0,0");
-}
-
 void ble_send_app_message(const char *text)
 {
     ble_send_text_notification(text);
@@ -130,8 +124,8 @@ static void ble_start_calibration_from_app(void)
         return;
     }
 
+    calibration_in_progress = true;
     ble_histogram_enabled = true;
-    ble_send_placeholder_histogram();
     ble_send_text_notification("ACK:AUTO_EQ_START");
     play_and_sample();
 }
@@ -303,9 +297,6 @@ static int ble_gap_event_cb(struct ble_gap_event *event, void *arg)
                     "TX notifications %s",
                     ble_notify_enabled ? "enabled" : "disabled");
 
-                if (ble_notify_enabled) {
-                    ble_send_placeholder_histogram();
-                }
             }
             return 0;
 

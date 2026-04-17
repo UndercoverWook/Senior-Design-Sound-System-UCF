@@ -38,6 +38,10 @@ void configure_spi()
 {
     esp_err_t err;
 
+    if (spi_hdl != NULL) {
+        return;
+    }
+
     // SPI BUS configuration
     spi_bus_config_t buscfg = {
         .mosi_io_num     = -1,
@@ -49,7 +53,7 @@ void configure_spi()
     };
 
     err = spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_DISABLED);
-    if (err != ESP_OK) {
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(STORAGE_TAG, "Failed to initialize SPI bus, ERROR: %s", esp_err_to_name(err));
         return;
     }
@@ -69,9 +73,9 @@ void configure_spi()
     err = spi_bus_add_device(SPI2_HOST, &devcfg, &spi_hdl);
     if (err != ESP_OK) {
         ESP_LOGE(STORAGE_TAG, "Failed to add SPI device, ERROR: %s", esp_err_to_name(err));
+        spi_hdl = NULL;
         return;
     }
-
 }
 
 void configure_i2s_for_wav(uint32_t sample_rate_hz, bool stereo_output)
