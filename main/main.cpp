@@ -13,8 +13,8 @@ extern "C" void app_main(void)
     configure_spiffs();
     reconfigure_wdt();
 
-    xTaskCreatePinnedToCore(vBT_playback_task, "BT Playback", STACK_DEPTH, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
-    //xTaskCreate(vUSB_playback_task, "USB Playback", STACK_DEPTH, NULL, configMAX_PRIORITIES - 1, &usb_task); // Give USB less priority
+    //xTaskCreatePinnedToCore(vBT_playback_task, "BT Playback", STACK_DEPTH, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
+    xTaskCreate(vUSB_playback_task, "USB Playback", STACK_DEPTH, NULL, 5, &usb_task); // Give USB less priority
 
     //play_and_sample();
 }

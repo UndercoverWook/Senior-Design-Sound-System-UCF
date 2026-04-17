@@ -24,13 +24,14 @@ void usb_uac_device_set_mute_cb(uint32_t mute, void *arg)
 
 void usb_uac_device_set_volume_cb(uint32_t _volume, void *arg)
 {
-	int volume_db = _volume / 2 - 50;
-	volume_factor = pow(10, volume_db / 20.0f) * 100.0f;
+	float volume_db = ((float)_volume / 100.0f) * 60.0f - 60.0f; // maps 0-100 → -60..0 dB
+    volume_factor = (uint32_t)(powf(10.0f, volume_db / 20.0f) * 100.0f);
+    ESP_LOGI("UAC", "Volume: raw=%lu, dB=%.1f, factor=%lu", _volume, volume_db, volume_factor);
 }
 
 void usb_uac_device_init(void)
 {
-	audio_ringbuf = xRingbufferCreate(192 * 16, RINGBUF_TYPE_BYTEBUF);
+	audio_ringbuf = xRingbufferCreate(192 * 64, RINGBUF_TYPE_BYTEBUF);
 	
     uac_device_config_t config = {
         .output_cb = usb_uac_device_output_cb,

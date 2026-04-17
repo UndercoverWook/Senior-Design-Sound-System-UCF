@@ -154,6 +154,7 @@ void vUSB_playback_task(void *arg)
         size_t bytes_received = 0;
         uint8_t *data = (uint8_t *)xRingbufferReceiveUpTo(audio_ringbuf, &bytes_received, portMAX_DELAY, 192);
         if (data) {
+			swap_bytes_16bit(data, bytes_received);
             size_t bytes_written = 0;
             i2s_channel_write(mcu_tx, data, bytes_received, &bytes_written, portMAX_DELAY);
             vRingbufferReturnItem(audio_ringbuf, data);

@@ -106,7 +106,7 @@ void configure_i2s_for_audio(bool bluetooth)
     if (bluetooth) {
 	    slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     } else {
-        slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+        slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
     }
 
 	// 2. CONFIG FOR TX (Output to DAC)
@@ -136,7 +136,7 @@ void configure_i2s_for_audio(bool bluetooth)
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_tx, &tx_std_cfg));
 	ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
-    if (bluetooth) {
+    if (bluetooth == true) {
         ESP_ERROR_CHECK(i2s_channel_init_std_mode(mcu_rx, &tx_std_cfg));
         ESP_ERROR_CHECK(i2s_channel_enable(mcu_rx));
     }

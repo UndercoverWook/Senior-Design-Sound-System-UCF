@@ -161,3 +161,12 @@ void init_eq(float sample_rate) {
         dsps_biquad_gen_peakingEQ_f32(&eq_coeffs[i * 5], eq_freqs[i] / sample_rate, 0.0);
     }
 }
+
+void swap_bytes_16bit(uint8_t *buf, size_t len)
+{
+    for (size_t i = 0; i + 1 < len; i += 2) {
+        uint8_t tmp = buf[i];
+        buf[i]      = buf[i + 1];
+        buf[i + 1]  = tmp;
+    }
+}
