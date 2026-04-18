@@ -14,5 +14,5 @@
     "--compile-commands-dir=c:\\Users\\matia\\SD_Final_V1\\build"
   ],
   "idf.flashType": "UART",
-  "idf.portWin": "COM8"
+  "idf.portWin": "COM9"
 }

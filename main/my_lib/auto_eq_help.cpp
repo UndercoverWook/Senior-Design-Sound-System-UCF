@@ -230,8 +230,8 @@ void calculate_band_gains_from_H(float *H, int fft_size, float sample_rate, floa
             float gain_db = -20.0f * log10f(avg_mag + 1e-6f);
             
             // Safety Clamp for Biquads (prevents clipping)
-            if (gain_db > 12.0f) gain_db = 12.0f;
-            if (gain_db < -12.0f) gain_db = -12.0f;
+            if (gain_db > 6.0f) gain_db = 6.0f;
+            if (gain_db < -6.0f) gain_db = -6.0f;
             
             out_gains[b] = gain_db;
         } else {
@@ -250,6 +250,7 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     emm6_file_to_arr();
     float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq, false); 
     free(samples);
+    show_FFT(sample_fft, NUM_BINS, SAMPLE_RATE);
 
     // Apply calibration to sampled data
     apply_calibration_to_fft(sample_fft, actual_freq);

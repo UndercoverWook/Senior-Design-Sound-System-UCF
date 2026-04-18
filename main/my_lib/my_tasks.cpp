@@ -141,12 +141,15 @@ void vPlay_WAV_task(void* args)
     // Apply volume/mute across the entire processed buffer
     apply_volume_and_mute(pcm, total_loaded / sizeof(int16_t));
 
-    // eTaskState usb_state = eTaskGetState(usb_task);
-    // if (usb_state == eRunning) {
-    //     while(usb_running);             // Stall until usb stops sending data
-    //     i2s_channel_disable(mcu_tx);
-    //     vTaskSuspend(usb_task);
-    // }
+    eTaskState usb_state = eTaskGetState(usb_task);
+    if (usb_state == eRunning) {
+        while(usb_running);             // Stall until usb stops sending data
+        i2s_channel_disable(mcu_tx);
+        vTaskSuspend(usb_task);
+    }
+
+    i2s_std_slot_config_t mono_slot = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+    i2s_channel_reconfig_std_slot(mcu_tx, &mono_slot);
 
     ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
 
@@ -169,7 +172,9 @@ void vPlay_WAV_task(void* args)
     ESP_LOGI(WAV_TAG, "Started: %u | Finished: %u", t_start, t_end);
 
     i2s_channel_disable(mcu_tx);
-    i2s_del_channel(mcu_tx);
+    i2s_std_slot_config_t stereo_slot = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+    i2s_channel_reconfig_std_slot(mcu_tx, &stereo_slot);
+    i2s_channel_enable(mcu_tx);
     free(wav_samples);
 
     xEventGroupSetBits(sync_tasks, TASK_B_DONE_BIT);
