@@ -41,8 +41,8 @@ static void calculate_band_gains_from_H(float *H, int fft_size, float sample_rat
             float avg_mag = sum_mag / (float)count;
             gain_db = -20.0f * log10f(avg_mag + 1e-6f);
         }
-        if (gain_db > 12.0f) gain_db = 12.0f;
-        if (gain_db < -12.0f) gain_db = -12.0f;
+        if (gain_db > 6.0f) gain_db = 6.0f;
+        if (gain_db < -6.0f) gain_db = -6.0f;
         out_gains[b] = gain_db;
     }
 }

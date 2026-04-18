@@ -62,3 +62,5 @@ void usb_uac_device_init(void)
     
     ESP_ERROR_CHECK(uac_device_init(&config));
 }
+
+
