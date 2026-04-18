@@ -250,7 +250,7 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     emm6_file_to_arr();
     float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq, false); 
     free(samples);
-    show_FFT(sample_fft, NUM_BINS, SAMPLE_RATE);
+    //show_FFT(sample_fft, NUM_BINS, SAMPLE_RATE);
 
     // Apply calibration to sampled data
     apply_calibration_to_fft(sample_fft, actual_freq);

@@ -36,8 +36,7 @@ esp_err_t usb_uac_device_output_cb(uint8_t *buf, size_t len, void *arg)
     TickType_t now = xTaskGetTickCount();
 
     if (last_cb_tick != 0 && (now - last_cb_tick) > pdMS_TO_TICKS(50)) {
-        ESP_LOGW("UAC", "Gap detected: %lums - flushing",
-                 (now - last_cb_tick) * portTICK_PERIOD_MS);
+        ESP_LOGW("UAC", "Gap detected: %lums - flushing", (now - last_cb_tick) * portTICK_PERIOD_MS);
         flush_required = true;  // signal the playback task
     }
     last_cb_tick = now;
@@ -64,7 +63,7 @@ void usb_uac_device_set_volume_cb(uint32_t _volume, void *arg)
 
 void usb_uac_device_init(void)
 {
-	audio_ringbuf = xRingbufferCreate(192 * 100, RINGBUF_TYPE_BYTEBUF);
+	audio_ringbuf = xRingbufferCreate(192 * 64, RINGBUF_TYPE_BYTEBUF);
 	
     uac_device_config_t config = {
         .output_cb = usb_uac_device_output_cb,

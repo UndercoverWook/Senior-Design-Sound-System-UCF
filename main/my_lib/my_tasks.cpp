@@ -4,6 +4,7 @@
 #include "auto_eq_help.h"
 #include "config_functions.h"
 #include "my_usb_device.h"
+#include <math.h>
 
 
 void vSample_task(void *args)
@@ -64,7 +65,6 @@ void vSample_task(void *args)
 
 void vPlay_WAV_task(void* args)
 {
-    // Open and read header first
     wave_reader_handle_t wav_f = wave_reader_open("/storage/48k_4sec_sweep.wav");
     if (wav_f == NULL) {
         ESP_LOGE(WAV_TAG, "Unable to open wav file");
@@ -78,14 +78,14 @@ void vPlay_WAV_task(void* args)
         vTaskDelete(NULL);
     }
 
-    uint32_t pcm_size    = N_SAMPLES * TEST_DURATION * CHANNELS;
+    // Mono source size
+    uint32_t pcm_size    = N_SAMPLES * TEST_DURATION * 1;
     uint8_t *wav_samples = (uint8_t *)heap_caps_malloc(pcm_size, MALLOC_CAP_SPIRAM);
     assert(wav_samples);
 
     uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);
     assert(buff);
 
-    // Load entire file into SPIRAM
     size_t pos = 0;
     while (pos < pcm_size) {
         size_t bytes_read = wave_read_raw_data(wav_f, buff, pos, BUFFER_BYTES);
@@ -113,50 +113,49 @@ void vPlay_WAV_task(void* args)
         my_dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / SAMPLE_RATE, Q, gain);
     }
 
-    int16_t *pcm = (int16_t *)wav_samples;
-    int total_samples = total_loaded / (sizeof(int16_t) * 2); // stereo frames
+    int     total_frames = total_loaded / sizeof(int16_t);
+    size_t  stereo_size  = total_frames * sizeof(int16_t) * 2;
 
-    for (int i = 0; i < total_samples; i++) {
-        float left_in  = (float)pcm[i * 2]     / 32768.0f;
-        float right_in = (float)pcm[i * 2 + 1] / 32768.0f;
-        float mono_sample = (left_in + right_in) * 0.4f;
+    int16_t *stereo_out = (int16_t *)heap_caps_malloc(stereo_size, MALLOC_CAP_SPIRAM);
+    assert(stereo_out);
+
+    int16_t *pcm_mono = (int16_t *)wav_samples;
+
+    for (int i = 0; i < total_frames; i++) {
+        float mono_sample = ((float)pcm_mono[i] / 32768.0f) * 0.45f;
 
         // 8-band peaking EQ cascade
         float eq_sample = mono_sample;
-        for (int b = 0; b < 8; b++) {
+        for (int b = 0; b < EQ_BANDS; b++) {
             float out;
             dsps_biquad_f32_aes3(&eq_sample, &out, 1, eq_coeffs[b], eq_w[b]);
             eq_sample = out;
         }
 
-        // Crossover split: left → sub, right → mid & high
         float sub_sample, mid_sample;
-        dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, hpf_coeffs, sub_lpf_w);
-        dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, lpf_coeffs, mid_hpf_w);
+        dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, lpf_coeffs, sub_lpf_w);
+        dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, hpf_coeffs, mid_hpf_w);
 
-        pcm[i * 2]     = (int16_t)(sub_sample * 32767.0f);
-        pcm[i * 2 + 1] = (int16_t)(mid_sample * 32767.0f);
+        stereo_out[i * 2]     = (int16_t)(mid_sample * 32767.0f); // left goes to mids
+        stereo_out[i * 2 + 1] = (int16_t)(sub_sample * 32767.0f); // right goes to sub
     }
 
-    // Apply volume/mute across the entire processed buffer
-    apply_volume_and_mute(pcm, total_loaded / sizeof(int16_t));
+    apply_volume_and_mute(stereo_out, stereo_size / sizeof(int16_t));
+    free(wav_samples);
 
     eTaskState usb_state = eTaskGetState(usb_task);
     if (usb_state == eRunning) {
-        while(usb_running);             // Stall until usb stops sending data
+        while(usb_running);
         i2s_channel_disable(mcu_tx);
         vTaskSuspend(usb_task);
     }
-
-    i2s_std_slot_config_t mono_slot = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
-    i2s_channel_reconfig_std_slot(mcu_tx, &mono_slot);
 
     ESP_ERROR_CHECK(i2s_channel_enable(mcu_tx));
 
     xEventGroupSync(sync_tasks, TASK_B_READY_BIT, ALL_TASKS_READY, portMAX_DELAY);
 
-    uint8_t *p          = wav_samples;
-    size_t   bytes_to_w = total_loaded;
+    uint8_t *p          = (uint8_t *)stereo_out;
+    size_t   bytes_to_w = stereo_size;
     size_t   wrote      = 0;
 
     uint32_t t_start = esp_log_timestamp();
@@ -172,10 +171,7 @@ void vPlay_WAV_task(void* args)
     ESP_LOGI(WAV_TAG, "Started: %u | Finished: %u", t_start, t_end);
 
     i2s_channel_disable(mcu_tx);
-    i2s_std_slot_config_t stereo_slot = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
-    i2s_channel_reconfig_std_slot(mcu_tx, &stereo_slot);
-    i2s_channel_enable(mcu_tx);
-    free(wav_samples);
+    free(stereo_out);
 
     xEventGroupSetBits(sync_tasks, TASK_B_DONE_BIT);
     vTaskDelete(NULL);
@@ -247,12 +243,12 @@ void vUSB_playback_task(void *arg)
 
                 // Crossover Filtering (Left to Sub, Right to M&H)
                 float sub_sample, mid_sample;
-                dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, hpf_coeffs, sub_lpf_w);
-                dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, lpf_coeffs, mid_hpf_w);
+                dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, lpf_coeffs, sub_lpf_w);
+                dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, hpf_coeffs, mid_hpf_w);
 
                 // Back to 16-bit data
-                pcm_in[i * 2]     = (int16_t)(sub_sample * 32767.0f);
-                pcm_in[i * 2 + 1] = (int16_t)(mid_sample * 32767.0f);
+                pcm_in[i * 2]     = (int16_t)(mid_sample * 32767.0f);
+                pcm_in[i * 2 + 1] = (int16_t)(sub_sample * 32767.0f);
             }
             apply_volume_and_mute((int16_t *)data, bytes_received / sizeof(int16_t));
             size_t bytes_written = 0;
@@ -263,100 +259,3 @@ void vUSB_playback_task(void *arg)
     }
     vTaskDelete(NULL);
 }
-
-
-/*
-void vBT_playback_task(void *arg)
-{
-	bm83_tx_ind_init();
-	// Wait for BT inidication of Paired Device
-	while (1) {
-        int level = gpio_get_level(MCU_WAKE);
-		if (level == 0) break;
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-
-	ESP_LOGI(BM83_TAG, "BM83 Transmitting!");
-	configure_i2s_for_audio(true);
-	//init_eq(48000.0f);
-
-	uint8_t *bt_buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Initialize array to store data coming from BT module
-	assert(bt_buff);	
-	
-	size_t bytes_read;
-	size_t wrote = 0;
-
-	esp_rom_gpio_connect_out_signal(GPIO_NUM_2, 0x100, false, false);
-    esp_rom_gpio_connect_in_signal(GPIO_NUM_2, 25, false);
-
-    gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0); // Lowest drive
-    gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
-   	gpio_set_drive_capability(I2S_TX_LINE, GPIO_DRIVE_CAP_0);
-
-	gpio_config_t io_conf = {
-		.pin_bit_mask = (1ULL << GPIO_NUM_2),
-		.mode 		  = GPIO_MODE_INPUT,
-		.pull_up_en   = GPIO_PULLUP_DISABLE,
-		.pull_down_en = GPIO_PULLDOWN_DISABLE,
-		.intr_type    = GPIO_INTR_DISABLE,
-	};
-	gpio_config(&io_conf);
-
-	//float *left_float = (float *)heap_caps_aligned_alloc(16, (BUFFER_BYTES / 4) * sizeof(float), MALLOC_CAP_INTERNAL);
-	//float *right_float = (float *)heap_caps_aligned_alloc(16, (BUFFER_BYTES / 4) * sizeof(float), MALLOC_CAP_INTERNAL);
-
-	// Read bytes from the Bluetooth Module (MCU acts as Receiver) and echo/send it to the DAC (MCU acts as Sender)
-	while (1)
-	{
-		esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);
-		//ESP_LOGI("BM83", "Read %d bytes", bytes_read);
-		
-		size_t bytes_to_w = bytes_read;
-		uint8_t *p = bt_buff;
-		if (bytes_read > 0) {
-			int16_t *raw_samples = (int16_t *)bt_buff;
-			int samples_per_channel = bytes_read / 4;
-
-			for (int i = 0; i < samples_per_channel; i++) {
-				left_float[i] = ((float)raw_samples[i * 2] / 32768.0f) * 0.5f;
-				right_float[i] = ((float)raw_samples[i * 2 + 1] / 32768.0f) * 0.5f;
-			}
-
-			for (int b = 0; b < EQ_BANDS; b++) {
-				// Left Channel
-				dsps_biquad_f32_ae32(left_float, left_float, samples_per_channel, &eq_coeffs[b * 5], &delay_l[b * 2]);
-				// Right Channel
-				dsps_biquad_f32_ae32(right_float, right_float, samples_per_channel, &eq_coeffs[b * 5], &delay_r[b * 2]);
-			}
-
-			for (int i = 0; i < samples_per_channel; i++) {
-				float l = left_float[i] * 32767.0f;
-				float r = right_float[i] * 32767.0f;
-				
-				raw_samples[i * 2] = (int16_t)((l > 32767) ? 32767 : (l < -32768) ? -32768 : l);
-				raw_samples[i * 2 + 1] = (int16_t)((r > 32767) ? 32767 : (r < -32768) ? -32768 : r);
-			}
-		}
-		
-		while (bytes_to_w > 0)
-		{			
-			ESP_ERROR_CHECK(i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY));
-			
-			if (wrote == 0) 
-			{ 
-				vTaskDelay(pdMS_TO_TICKS(1)); 
-				continue; 
-			}	
-			bytes_to_w -= wrote;		// If written -> OK, then decrease counter
-			p += wrote;					// Increase pointer to buffer	
-		}// end of inner while loop
-	}// end of main while loop
-
-	ESP_LOGW(BM83_TAG, "Bluetooth device disconnected");
-	
-	free(bt_buff);
-	i2s_channel_disable(mcu_tx);
-	i2s_channel_disable(mcu_rx);
-	vTaskDelete(NULL);
-}
-*/

@@ -94,8 +94,8 @@ int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
         // Each uint16_t sample = 2 bytes, so iterate in steps of 2.
         for (size_t i = 0; i + 1 < bytes_read && sample_count < max_samples; i += 2)
         {
-            // Little-endian: low byte first, high byte second (standard WAV format)
-            samples[sample_count++] = (uint16_t)(buff[i] | (buff[i + 1] << 8));
+            int16_t signed_sample = (int16_t)(buff[i] | (buff[i + 1] << 8));
+            samples[sample_count++] = (uint16_t)(signed_sample + 32768);
         }
     }
 

@@ -56,9 +56,9 @@ void configure_spi()
 void configure_i2s()
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
-	// chan_cfg.dma_desc_num = 8;
-	// chan_cfg.dma_frame_num = 256;
-    // chan_cfg.auto_clear = true;
+	chan_cfg.dma_desc_num = 8;
+	chan_cfg.dma_frame_num = 256;
+    chan_cfg.auto_clear = true;
 
     ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &mcu_tx, NULL));
     

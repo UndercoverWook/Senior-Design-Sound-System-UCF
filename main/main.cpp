@@ -13,4 +13,8 @@ extern "C" void app_main(void)
     configure_spiffs();
     reconfigure_wdt();
     configure_i2s();
+
+    xTaskCreatePinnedToCore(vUSB_playback_task, "USB", STACK_DEPTH * 2, NULL, 5, &usb_task, CORE1);
+    
+   // play_and_sample();
 }
