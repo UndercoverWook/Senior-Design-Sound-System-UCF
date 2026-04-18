@@ -49,6 +49,8 @@ static void ble_start_advertising(void);
 static void ble_send_text_notification(const char *text);
 static void ble_start_calibration_from_app(void);
 static void ble_handle_app_command(const char *cmd);
+static int ble_find_eq_band_index(int band_hz);
+static void ble_reset_eq_state(void);
 
 static int ble_gatt_access_cb(uint16_t conn_handle,
                               uint16_t attr_handle,
@@ -167,6 +169,23 @@ void ble_publish_fft_bins_from_complex(const float *fft_complex, float sample_ra
     ble_send_text_notification(msg);
 }
 
+static int ble_find_eq_band_index(int band_hz)
+{
+    for (int i = 0; i < EQ_BANDS; ++i) {
+        if ((int)lroundf(eq_freqs[i]) == band_hz) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void ble_reset_eq_state(void)
+{
+    memset(eq_w, 0, sizeof(eq_w));
+    memset(sub_lpf_w, 0, sizeof(sub_lpf_w));
+    memset(mid_hpf_w, 0, sizeof(mid_hpf_w));
+}
+
 static void ble_handle_app_command(const char *cmd)
 {
     if (cmd == NULL || cmd[0] == '\0') {
@@ -215,7 +234,13 @@ static void ble_handle_app_command(const char *cmd)
     }
 
     if (strcmp(cmd, "EQ_RESET") == 0) {
-        ESP_LOGI(BLE_TAG, "EQ reset requested");
+        for (int i = 0; i < EQ_BANDS; ++i) {
+            app_sliders[i] = 0.0f;
+        }
+        activate_eq = true;
+        flush_required = true;
+        ble_reset_eq_state();
+        ESP_LOGI(BLE_TAG, "EQ reset applied");
         return;
     }
 
@@ -225,7 +250,30 @@ static void ble_handle_app_command(const char *cmd)
     }
 
     if (strncmp(cmd, "EQ", 2) == 0) {
-        ESP_LOGI(BLE_TAG, "EQ band update: %s", cmd);
+        int band_hz = 0;
+        float gain_db = 0.0f;
+        if (sscanf(cmd, "EQ%d:%f", &band_hz, &gain_db) == 2) {
+            const int band_idx = ble_find_eq_band_index(band_hz);
+            if (band_idx >= 0) {
+                if (gain_db > 6.0f) gain_db = 6.0f;
+                if (gain_db < -6.0f) gain_db = -6.0f;
+
+                app_sliders[band_idx] = gain_db;
+                activate_eq = true;
+                flush_required = true;
+                ble_reset_eq_state();
+
+                ESP_LOGI(BLE_TAG,
+                         "Applied EQ update: band=%d Hz index=%d gain=%.1f dB",
+                         band_hz,
+                         band_idx,
+                         gain_db);
+            } else {
+                ESP_LOGW(BLE_TAG, "Unknown EQ band in command: %s", cmd);
+            }
+        } else {
+            ESP_LOGW(BLE_TAG, "Malformed EQ command: %s", cmd);
+        }
         return;
     }
 }

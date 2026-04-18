@@ -161,8 +161,8 @@ static void process_stereo_pcm_inplace(int16_t *pcm, size_t frame_count)
         float mid_sample = 0.0f;
         dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, lpf_coeffs, sub_lpf_w);
         dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, hpf_coeffs, mid_hpf_w);
-        pcm[i * 2 + 0] = clamp_to_i16(sub_sample * 32767.0f);
-        pcm[i * 2 + 1] = clamp_to_i16(mid_sample * 32767.0f);
+        pcm[i * 2 + 0] = clamp_to_i16(mid_sample * 32767.0f);
+        pcm[i * 2 + 1] = clamp_to_i16(sub_sample * 32767.0f);
     }
 }
 
@@ -371,42 +371,11 @@ void vPlay_WAV_task(void* args)
         return;
     }
 
-    memset(eq_w, 0, sizeof(eq_w));
-    memset(sub_lpf_w, 0, sizeof(sub_lpf_w));
-    memset(mid_hpf_w, 0, sizeof(mid_hpf_w));
-
-    float crossover_f = 250.0f;
-    dsps_biquad_gen_lpf_f32(lpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
-    dsps_biquad_gen_hpf_f32(hpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
-
-    for (int i = 0; i < EQ_BANDS; i++) {
-        float gain = app_sliders[i];
-        float Q = 1.0f;
-        my_dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / SAMPLE_RATE, Q, gain);
-    }
+    refresh_filter_coeffs_if_needed(true);
 
     int16_t *pcm = (int16_t *)playback_buf;
     int total_samples = total_output_bytes / (sizeof(int16_t) * 2);
-
-    for (int i = 0; i < total_samples; i++) {
-        float left_in = (float)pcm[i * 2] / 32768.0f;
-        float right_in = (float)pcm[i * 2 + 1] / 32768.0f;
-        float mono_sample = (left_in + right_in) * 0.4f;
-
-        float eq_sample = mono_sample;
-        for (int b = 0; b < EQ_BANDS; b++) {
-            float out;
-            dsps_biquad_f32_aes3(&eq_sample, &out, 1, eq_coeffs[b], eq_w[b]);
-            eq_sample = out;
-        }
-
-        float sub_sample, mid_sample;
-        dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, hpf_coeffs, sub_lpf_w);
-        dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, lpf_coeffs, mid_hpf_w);
-
-        pcm[i * 2]     = (int16_t)(sub_sample * 32767.0f);
-        pcm[i * 2 + 1] = (int16_t)(mid_sample * 32767.0f);
-    }
+    process_stereo_pcm_inplace(pcm, total_samples);
 
     apply_volume_and_mute(pcm, total_output_bytes / sizeof(int16_t));
 
@@ -488,19 +457,12 @@ void vUSB_playback_task(void *arg)
     float processing_buffer_R[48];
     (void)processing_buffer_L;
     (void)processing_buffer_R;
-    float crossover_f = 250.0f;
 
-    dsps_biquad_gen_lpf_f32(lpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
-    dsps_biquad_gen_hpf_f32(hpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
-
-    for (int i = 0; i < EQ_BANDS; i++) {
-        float gain = app_sliders[i];
-        float Q = 1.0f;
-        my_dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / SAMPLE_RATE, Q, gain);
-    }
+    refresh_filter_coeffs_if_needed(true);
 
     while (1) {
         usb_running = true;
+        refresh_filter_coeffs_if_needed(false);
         if (flush_required) {
             flush_required = false;
 
@@ -525,25 +487,7 @@ void vUSB_playback_task(void *arg)
             int16_t *pcm_in = (int16_t *)data;
             int num_samples = bytes_received / (sizeof(int16_t) * 2);
 
-            for (int i = 0; i < num_samples; i++) {
-                float left_in = (float)pcm_in[i * 2] / 32768.0f;
-                float right_in = (float)pcm_in[i * 2 + 1] / 32768.0f;
-                float mono_sample = (left_in + right_in) * 0.4f;
-
-                float eq_sample = mono_sample;
-                for (int b = 0; b < 8; b++) {
-                    float out;
-                    dsps_biquad_f32_aes3(&eq_sample, &out, 1, eq_coeffs[b], eq_w[b]);
-                    eq_sample = out;
-                }
-
-                float sub_sample, mid_sample;
-                dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, hpf_coeffs, sub_lpf_w);
-                dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, lpf_coeffs, mid_hpf_w);
-
-                pcm_in[i * 2]     = (int16_t)(sub_sample * 32767.0f);
-                pcm_in[i * 2 + 1] = (int16_t)(mid_sample * 32767.0f);
-            }
+            process_stereo_pcm_inplace(pcm_in, num_samples);
             apply_volume_and_mute((int16_t *)data, bytes_received / sizeof(int16_t));
             size_t bytes_written = 0;
             i2s_channel_write(mcu_tx, data, bytes_received, &bytes_written, portMAX_DELAY);
@@ -598,6 +542,8 @@ void vBT_playback_task(void *arg)
     float *float_conv_buff = (float *)heap_caps_malloc(num_samples * sizeof(float), MALLOC_CAP_INTERNAL);
     (void)float_conv_buff;
 
+    refresh_filter_coeffs_if_needed(true);
+
     while (1)
     {
         if (mcu_rx == NULL || mcu_tx == NULL) {
@@ -610,6 +556,10 @@ void vBT_playback_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }
+
+        refresh_filter_coeffs_if_needed(false);
+        process_stereo_pcm_inplace((int16_t *)bt_buff, bytes_read / FRAME_SIZE_BYTES);
+        apply_volume_and_mute((int16_t *)bt_buff, bytes_read / sizeof(int16_t));
 
         size_t bytes_to_w = bytes_read;
         uint8_t *p = bt_buff;

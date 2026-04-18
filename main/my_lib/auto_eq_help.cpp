@@ -306,8 +306,14 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
         return NULL;
     }
 
+
+
     calculate_band_gains_from_H(H, FFT_SIZE, SAMPLE_RATE, band_gains);
     free(H);
     dsps_fft2r_deinit_fc32();
+    for (int i = 0; i < EQ_BANDS; i++) {
+        ESP_LOGI(EQ_TAG, "Band %d: Center=%.1fHz Gain=%.2fdB", i, eq_freqs[i], band_gains[i]);
+    }
     return band_gains;
+    
 }
