@@ -18,10 +18,18 @@ TaskHandle_t         usb_task      = NULL;
 RingbufHandle_t      audio_ringbuf = NULL;
 EventGroupHandle_t   sync_tasks    = NULL;
 
-float cal_values[256][2]    = {};
+float cal_values[256][2] = {};
 bool activate_eq = false;
-float eq_freqs[EQ_BANDS] = {60, 250, 500, 1000, 2000, 4000, 8000, 16000};
-float app_sliders[EQ_BANDS] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+float eq_freqs[EQ_BANDS] = {60, 125, 250, 500, 1000, 2000, 4000, 8000, 16000};
+float app_sliders[EQ_BANDS] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+extern float eq_w[EQ_BANDS][2] = {};
+extern float sub_lpf_w[2] = {}; // State for Subwoofer (Left)
+extern float mid_hpf_w[2] = {}; // State for Mids/Highs (Right)
+extern float eq_coeffs[EQ_BANDS][5] = {}; 
+extern float lpf_coeffs[5] = {};
+extern float hpf_coeffs[5] = {};
+extern bool usb_running = false;
+
 
 const char *STORAGE_TAG  = "File System";
 const char *SPI_TAG      = "SPI Configuration";

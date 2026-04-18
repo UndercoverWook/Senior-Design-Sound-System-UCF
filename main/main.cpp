@@ -14,11 +14,10 @@ extern "C" void app_main(void)
     reconfigure_wdt();
     configure_i2s();
 
-    xTaskCreate(vUSB_playback_task, "USB Playback", STACK_DEPTH, NULL, 5, &usb_task);
+    //xTaskCreate(vUSB_playback_task, "USB Playback", STACK_DEPTH, NULL, 5, &usb_task);
+    //play_and_sample();
 
-    // play_and_sample();
-
-    // dsps_fft2r_init_fc32(NULL, FFT_SIZE);
-    // float *wav_fft = wav_to_fft();
-    // show_FFT(wav_fft, NUM_BINS, SAMPLE_RATE);
+    esp_err_t err = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
+    float *wav_fft = wav_to_fft();
+    show_FFT(wav_fft, NUM_BINS, SAMPLE_RATE);
 }

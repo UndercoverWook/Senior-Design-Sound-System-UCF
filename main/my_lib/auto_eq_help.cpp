@@ -268,7 +268,6 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
         ESP_LOGI(EQ_TAG, "Band %d gain: %.3f", i, band_gains[i]);
     }
 
-    // Cleanup the big buffers and De-initialize FFT
     free(H);
     dsps_fft2r_deinit_fc32();
 

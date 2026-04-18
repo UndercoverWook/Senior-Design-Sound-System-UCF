@@ -136,7 +136,7 @@ float* load_fft_cache(int num_bins)
 float* wav_to_fft()
 {
     uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    int count = load_wav_to_array("/storage/mono_sweep.wav", samples, N_SAMPLES);
+    int count = load_wav_to_array("/storage/48k_4sec_sweep.wav", samples, N_SAMPLES);
     float* wav_fft = compute_fft(samples, count, SAMPLE_RATE, true);
     free(samples);
 
@@ -152,13 +152,6 @@ void play_and_sample()
     vEventGroupDelete(sync_tasks);
 }
 
-void init_eq(float sample_rate) {
-    
-    for (int i = 0; i < EQ_BANDS; i++) {
-        dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / sample_rate, 0.0);
-    }
-}
-
 void swap_bytes_16bit(uint8_t *buf, size_t len)
 {
     for (size_t i = 0; i + 1 < len; i += 2) {
@@ -167,3 +160,34 @@ void swap_bytes_16bit(uint8_t *buf, size_t len)
         buf[i + 1]  = tmp;
     }
 }
+
+esp_err_t my_dsps_biquad_gen_peakingEQ_f32(float *coeffs, float f, float gain_db, float qFactor)
+{
+    // 1. Safety check for Q
+    if (qFactor <= 0.0001f) qFactor = 0.0001f;
+
+    // 2. Calculate the Gain multiplier (A)
+    float A = powf(10, gain_db / 40.0f);
+    float w0 = 2 * M_PI * f;
+    float c = cosf(w0);
+    float s = sinf(w0);
+    float alpha = s / (2.0f * qFactor);
+
+    // 3. Calculate raw coefficients
+    float b0 = 1 + (alpha * A);
+    float b1 = -2 * c;
+    float b2 = 1 - (alpha * A);
+    float a0 = 1 + (alpha / A);
+    float a1 = -2 * c;
+    float a2 = 1 - (alpha / A);
+
+    // 4. Normalize by a0 so a0 is effectively 1.0
+    coeffs[0] = b0 / a0;
+    coeffs[1] = b1 / a0;
+    coeffs[2] = b2 / a0;
+    coeffs[3] = a1 / a0;
+    coeffs[4] = a2 / a0;
+
+    return ESP_OK;
+}
+

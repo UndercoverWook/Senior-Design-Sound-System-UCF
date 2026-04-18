@@ -72,16 +72,7 @@ extern "C" {
 #define TASK_B_DONE_BIT   (1 << 3)
 #define ALL_TASKS_READY   (TASK_A_READY_BIT | TASK_B_READY_BIT)
 #define ALL_TASKS_DONE    (TASK_A_DONE_BIT  | TASK_B_DONE_BIT)
-#define EQ_BANDS 8
-
-extern float eq_freqs[EQ_BANDS];
-extern float eq_w[EQ_BANDS][2];   // State for 8 EQ bands
-extern float sub_lpf_w[2]; // State for Subwoofer (Left)
-extern float mid_hpf_w[2]; // State for Mids/Highs (Right)
-extern float eq_coeffs[EQ_BANDS][5]; 
-extern float lpf_coeffs[5];
-extern float hpf_coeffs[5];
-extern float app_sliders[EQ_BANDS];
+#define EQ_BANDS 9
 
 // GPIOs Declarations
 static const gpio_num_t MCU_WAKE	 	= GPIO_NUM_1;		// Wake up the MCU
@@ -119,6 +110,16 @@ extern EventGroupHandle_t   sync_tasks;     // Synchronization mechanism for con
 extern float cal_values [256][2];			// To store calibration values as a pair of values in a 2D array fashion
 static const uint32_t STACK_DEPTH = 8192;	// Stack allocation for FreeRTOS Tasks
 extern bool activate_eq;                    // Global flag to indicate whether to apply EQ or not 
+extern float eq_freqs[EQ_BANDS];
+extern float eq_w[EQ_BANDS][2];   // State for 8 EQ bands
+extern float sub_lpf_w[2]; // State for Subwoofer (Left)
+extern float mid_hpf_w[2]; // State for Mids/Highs (Right)
+extern float eq_coeffs[EQ_BANDS][5]; 
+extern float lpf_coeffs[5];
+extern float hpf_coeffs[5];
+extern float app_sliders[EQ_BANDS];
+extern bool usb_running;
+
 
 // TAGS:
 extern const char *STORAGE_TAG;

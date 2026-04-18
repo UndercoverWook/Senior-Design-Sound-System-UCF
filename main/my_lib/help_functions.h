@@ -37,11 +37,12 @@ void play_and_sample();
 // Function to load the WAV file and convert it to an array of samples
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples);
 
-// Function to initialize the Biquad filters for 8-band Filter 
-void init_eq(float sample_rate);
-
 // Swap bytes for I2S (from USB)
 void swap_bytes_16bit(uint8_t *buf, size_t len);
+
+// Overwrite ESP-DSP Peak EQ generation function
+esp_err_t my_dsps_biquad_gen_peakingEQ_f32(float *coeffs, float f, float gain_db, float qFactor);
+
 
 #ifdef __cplusplus
 }
