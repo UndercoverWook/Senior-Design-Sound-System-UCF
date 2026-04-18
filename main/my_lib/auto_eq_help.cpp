@@ -22,32 +22,28 @@ static const float CAL_SENSITIVITY_1KHZ = -38.1f;  // dB re 1V/Pa at 1kHz
 
 static void calculate_band_gains_from_H(float *H, int fft_size, float sample_rate, float *out_gains)
 {
-    if (!H || !out_gains) return;
     for (int b = 0; b < EQ_BANDS; b++) {
         float low_f = eq_freqs[b] * 0.707f;
         float high_f = eq_freqs[b] * 1.414f;
-        if (low_f < FREQ_START) low_f = FREQ_START;
-        if (high_f > FREQ_END) high_f = FREQ_END;
         float sum_mag = 0.0f;
         int count = 0;
-        for (int i = 1; i < fft_size / 2; i++) {
+        for (int i = 0; i < fft_size / 2; i++) {
             float bin_freq = (float)i * sample_rate / fft_size;
             if (bin_freq >= low_f && bin_freq <= high_f) {
-                float re = H[i*2 + 0];
-                float im = H[i*2 + 1];
+                float re = H[i * 2];
+                float im = H[i * 2 + 1];
                 sum_mag += sqrtf(re * re + im * im);
                 count++;
             }
         }
+        float gain_db = 0.0f;
         if (count > 0) {
             float avg_mag = sum_mag / (float)count;
-            float gain_db = -20.0f * log10f(avg_mag + 1e-6f);
-            if (gain_db > 12.0f) gain_db = 12.0f;
-            if (gain_db < -12.0f) gain_db = -12.0f;
-            out_gains[b] = gain_db;
-        } else {
-            out_gains[b] = 0.0f;
+            gain_db = -20.0f * log10f(avg_mag + 1e-6f);
         }
+        if (gain_db > 12.0f) gain_db = 12.0f;
+        if (gain_db < -12.0f) gain_db = -12.0f;
+        out_gains[b] = gain_db;
     }
 }
 
@@ -284,8 +280,8 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
 
     if (wav_fft == NULL || sample_fft == NULL) {
         ESP_LOGE(EQ_TAG, "FFT generation failed: wav_fft=%p sample_fft=%p", wav_fft, sample_fft);
-        if (wav_fft != NULL) free(wav_fft);
-        if (sample_fft != NULL) free(sample_fft);
+        if (wav_fft) free(wav_fft);
+        if (sample_fft) free(sample_fft);
         dsps_fft2r_deinit_fc32();
         return NULL;
     }
@@ -310,7 +306,7 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
         return NULL;
     }
 
-    calculate_band_gains_from_H(H, FFT_SIZE, actual_freq, band_gains);
+    calculate_band_gains_from_H(H, FFT_SIZE, SAMPLE_RATE, band_gains);
     free(H);
     dsps_fft2r_deinit_fc32();
     return band_gains;

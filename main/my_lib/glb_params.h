@@ -69,7 +69,7 @@ extern "C" {
 #define TASK_A_READY_BIT  BIT0
 #define TASK_B_READY_BIT  BIT1
 #define ALL_TASKS_READY   (TASK_A_READY_BIT | TASK_B_READY_BIT)
-#define EQ_BANDS         9
+#define EQ_BANDS         8
 
 // GPIOs Declarations
 static const gpio_num_t MCU_WAKE	 	= GPIO_NUM_1;		// Wake up the MCU
@@ -119,6 +119,7 @@ extern float eq_coeffs[EQ_BANDS][5];
 extern float lpf_coeffs[5];
 extern float hpf_coeffs[5];
 extern bool usb_running;
+extern volatile bool flush_required;
 
 // TAGS:
 extern const char *STORAGE_TAG;

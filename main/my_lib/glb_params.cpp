@@ -22,7 +22,7 @@ float cal_values[256][2]    = {};
 bool activate_eq = false;
 volatile bool wav_playback_active = false;
 volatile bool calibration_in_progress = false;
-float eq_freqs[EQ_BANDS] = {60.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f, 16000.0f};
+float eq_freqs[EQ_BANDS] = {60.0f, 125.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f, 16000.0f};
 float app_sliders[EQ_BANDS] = {0};
 float eq_w[EQ_BANDS][2] = {{0}};
 float sub_lpf_w[2] = {0};
@@ -31,6 +31,7 @@ float eq_coeffs[EQ_BANDS][5] = {{0}};
 float lpf_coeffs[5] = {0};
 float hpf_coeffs[5] = {0};
 bool usb_running = false;
+volatile bool flush_required = false;
 
 const char *STORAGE_TAG  = "File System";
 const char *SPI_TAG      = "SPI Configuration";

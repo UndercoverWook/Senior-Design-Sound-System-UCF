@@ -8,6 +8,15 @@
 #include <math.h>
 #include <string.h>
 
+static bool is_task_suspendable(TaskHandle_t task)
+{
+    if (task == NULL) {
+        return false;
+    }
+    eTaskState state = eTaskGetState(task);
+    return state != eDeleted && state != eInvalid;
+}
+
 static bool load_and_expand_wav_to_buffer(
     wave_reader_handle_t wav,
     uint32_t wav_channels,
@@ -115,7 +124,6 @@ static void refresh_filter_coeffs_if_needed(bool force_reset_states)
             }
         }
     }
-
     if (!gains_changed) return;
 
     const float crossover_f = 250.0f;
@@ -218,11 +226,11 @@ void vSample_task(void *args)
         vTaskDelete(NULL);
         return;
     }
-    for (int i = 0; i < EQ_BANDS; i++) {
+    for (int i = 0; i < EQ_BANDS; ++i) {
         app_sliders[i] = band_gains[i];
     }
-    free(band_gains);
     activate_eq = true;
+    free(band_gains);
 
     finish_calibration_run(true);
     vTaskDelete(NULL);
@@ -231,7 +239,18 @@ void vSample_task(void *args)
 void vPlay_WAV_task(void* args)
 {
     wav_playback_active = true;
+    bool resume_bt_after_play = false;
+    bool playback_failed = false;
     wave_reader_handle_t local_wav_hdl = NULL;
+
+    // Suspend BM83 playback task whenever we take over I2S0 for WAV playback.
+    if (is_task_suspendable(bt_task)) {
+        if (mcu_rx != NULL) {
+            i2s_channel_disable(mcu_rx);
+        }
+        vTaskSuspend(bt_task);
+        resume_bt_after_play = !calibration_in_progress;
+    }
 
     wave_header_t wav_head;
     local_wav_hdl = wave_reader_open("/storage/48k_4sec_sweep.wav");
@@ -242,6 +261,9 @@ void vPlay_WAV_task(void* args)
         if (calibration_in_progress) {
             calibration_in_progress = false;
             ble_send_app_message("ERR:PLAY_WAV");
+        }
+        if (resume_bt_after_play && bt_task) {
+            vTaskResume(bt_task);
         }
         vTaskDelete(NULL);
         return;
@@ -255,6 +277,9 @@ void vPlay_WAV_task(void* args)
         if (calibration_in_progress) {
             calibration_in_progress = false;
             ble_send_app_message("ERR:PLAY_WAV");
+        }
+        if (resume_bt_after_play && bt_task) {
+            vTaskResume(bt_task);
         }
         vTaskDelete(NULL);
         return;
@@ -275,6 +300,9 @@ void vPlay_WAV_task(void* args)
             calibration_in_progress = false;
             ble_send_app_message("ERR:PLAY_WAV");
         }
+        if (resume_bt_after_play && bt_task) {
+            vTaskResume(bt_task);
+        }
         vTaskDelete(NULL);
         return;
     }
@@ -291,6 +319,8 @@ void vPlay_WAV_task(void* args)
              (unsigned)target_input_bytes,
              (unsigned)target_output_bytes);
 
+    // Pre-load the full sweep into RAM before the sync point so the actual output starts much closer
+    // to the ADC capture start.
     uint8_t *playback_buf = (uint8_t *)heap_caps_malloc(target_output_bytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     if (playback_buf == NULL) {
         ESP_LOGE(WAV_TAG, "Unable to allocate playback buffer (%u bytes)", (unsigned)target_output_bytes);
@@ -300,6 +330,9 @@ void vPlay_WAV_task(void* args)
         if (calibration_in_progress) {
             calibration_in_progress = false;
             ble_send_app_message("ERR:PLAY_WAV");
+        }
+        if (resume_bt_after_play && bt_task) {
+            vTaskResume(bt_task);
         }
         vTaskDelete(NULL);
         return;
@@ -331,14 +364,51 @@ void vPlay_WAV_task(void* args)
             calibration_in_progress = false;
             ble_send_app_message("ERR:PLAY_WAV");
         }
+        if (resume_bt_after_play && bt_task) {
+            vTaskResume(bt_task);
+        }
         vTaskDelete(NULL);
         return;
     }
 
-    if (activate_eq && !calibration_in_progress) {
-        refresh_filter_coeffs_if_needed(true);
-        process_stereo_pcm_inplace((int16_t *)playback_buf, total_output_bytes / FRAME_SIZE_BYTES);
+    memset(eq_w, 0, sizeof(eq_w));
+    memset(sub_lpf_w, 0, sizeof(sub_lpf_w));
+    memset(mid_hpf_w, 0, sizeof(mid_hpf_w));
+
+    float crossover_f = 250.0f;
+    dsps_biquad_gen_lpf_f32(lpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
+    dsps_biquad_gen_hpf_f32(hpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
+
+    for (int i = 0; i < EQ_BANDS; i++) {
+        float gain = app_sliders[i];
+        float Q = 1.0f;
+        my_dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / SAMPLE_RATE, Q, gain);
     }
+
+    int16_t *pcm = (int16_t *)playback_buf;
+    int total_samples = total_output_bytes / (sizeof(int16_t) * 2);
+
+    for (int i = 0; i < total_samples; i++) {
+        float left_in = (float)pcm[i * 2] / 32768.0f;
+        float right_in = (float)pcm[i * 2 + 1] / 32768.0f;
+        float mono_sample = (left_in + right_in) * 0.4f;
+
+        float eq_sample = mono_sample;
+        for (int b = 0; b < EQ_BANDS; b++) {
+            float out;
+            dsps_biquad_f32_aes3(&eq_sample, &out, 1, eq_coeffs[b], eq_w[b]);
+            eq_sample = out;
+        }
+
+        float sub_sample, mid_sample;
+        dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, hpf_coeffs, sub_lpf_w);
+        dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, lpf_coeffs, mid_hpf_w);
+
+        pcm[i * 2]     = (int16_t)(sub_sample * 32767.0f);
+        pcm[i * 2 + 1] = (int16_t)(mid_sample * 32767.0f);
+    }
+
+    apply_volume_and_mute(pcm, total_output_bytes / sizeof(int16_t));
 
     configure_i2s_for_wav(wav_sample_rate, stereo_output);
     if (mcu_tx == NULL) {
@@ -347,6 +417,8 @@ void vPlay_WAV_task(void* args)
         wav_playback_active = false;
         if (calibration_in_progress) {
             finish_calibration_run(false);
+        } else if (resume_bt_after_play && bt_task) {
+            vTaskResume(bt_task);
         }
         vTaskDelete(NULL);
         return;
@@ -368,8 +440,10 @@ void vPlay_WAV_task(void* args)
                      (unsigned)(total_output_bytes - bytes_left),
                      (unsigned)total_output_bytes,
                      esp_err_to_name(r));
+            playback_failed = true;
             if (calibration_in_progress) {
-                finish_calibration_run(false);
+                ble_send_app_message("CAL_FAILED");
+                calibration_in_progress = false;
             }
             break;
         }
@@ -392,30 +466,90 @@ void vPlay_WAV_task(void* args)
              (unsigned)target_output_bytes);
 
     free(playback_buf);
+
     configure_i2s_for_audio(true);
+
     wav_playback_active = false;
+    if (resume_bt_after_play && bt_task) {
+        vTaskResume(bt_task);
+    }
     vTaskDelete(NULL);
 }
 
 void vUSB_playback_task(void *arg)
 {
     configure_i2s_for_audio(false);
+    usb_running = true;
     usb_uac_device_init();
+    i2s_channel_enable(mcu_tx);
+
+    static uint8_t silence[192] = {0};
+    float processing_buffer_L[48];
+    float processing_buffer_R[48];
+    (void)processing_buffer_L;
+    (void)processing_buffer_R;
+    float crossover_f = 250.0f;
+
+    dsps_biquad_gen_lpf_f32(lpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
+    dsps_biquad_gen_hpf_f32(hpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
+
+    for (int i = 0; i < EQ_BANDS; i++) {
+        float gain = app_sliders[i];
+        float Q = 1.0f;
+        my_dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / SAMPLE_RATE, Q, gain);
+    }
 
     while (1) {
+        usb_running = true;
+        if (flush_required) {
+            flush_required = false;
+
+            size_t bytes_received = 0;
+            uint8_t *stale;
+            do {
+                stale = (uint8_t *)xRingbufferReceiveUpTo(audio_ringbuf, &bytes_received, 0, 192 * 100);
+                if (stale) vRingbufferReturnItem(audio_ringbuf, stale);
+            } while (stale);
+
+            size_t written;
+            for (int i = 0; i < 8; i++) {
+                i2s_channel_write(mcu_tx, silence, sizeof(silence), &written, pdMS_TO_TICKS(10));
+            }
+            continue;
+        }
+
         size_t bytes_received = 0;
         uint8_t *data = (uint8_t *)xRingbufferReceiveUpTo(audio_ringbuf, &bytes_received, portMAX_DELAY, 192);
+
         if (data) {
-            usb_running = true;
-            if (activate_eq && bytes_received >= FRAME_SIZE_BYTES) {
-                refresh_filter_coeffs_if_needed(false);
-                process_stereo_pcm_inplace((int16_t *)data, bytes_received / FRAME_SIZE_BYTES);
+            int16_t *pcm_in = (int16_t *)data;
+            int num_samples = bytes_received / (sizeof(int16_t) * 2);
+
+            for (int i = 0; i < num_samples; i++) {
+                float left_in = (float)pcm_in[i * 2] / 32768.0f;
+                float right_in = (float)pcm_in[i * 2 + 1] / 32768.0f;
+                float mono_sample = (left_in + right_in) * 0.4f;
+
+                float eq_sample = mono_sample;
+                for (int b = 0; b < 8; b++) {
+                    float out;
+                    dsps_biquad_f32_aes3(&eq_sample, &out, 1, eq_coeffs[b], eq_w[b]);
+                    eq_sample = out;
+                }
+
+                float sub_sample, mid_sample;
+                dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, hpf_coeffs, sub_lpf_w);
+                dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, lpf_coeffs, mid_hpf_w);
+
+                pcm_in[i * 2]     = (int16_t)(sub_sample * 32767.0f);
+                pcm_in[i * 2 + 1] = (int16_t)(mid_sample * 32767.0f);
             }
+            apply_volume_and_mute((int16_t *)data, bytes_received / sizeof(int16_t));
             size_t bytes_written = 0;
             i2s_channel_write(mcu_tx, data, bytes_received, &bytes_written, portMAX_DELAY);
-            usb_running = false;
             vRingbufferReturnItem(audio_ringbuf, data);
         }
+        usb_running = false;
     }
     vTaskDelete(NULL);
 }
@@ -466,18 +600,13 @@ void vBT_playback_task(void *arg)
 
     while (1)
     {
-        if (wav_playback_active || calibration_in_progress) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
-        }
-
         if (mcu_rx == NULL || mcu_tx == NULL) {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
 
-        esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, pdMS_TO_TICKS(10));
-        if (r != ESP_OK || bytes_read == 0) {
+        esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);
+        if (r != ESP_OK) {
             vTaskDelay(pdMS_TO_TICKS(1));
             continue;
         }

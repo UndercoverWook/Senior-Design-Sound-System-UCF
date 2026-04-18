@@ -9,7 +9,7 @@
 #include "my_usb_device.h"
 
 static bool is_muted = false;
-static uint32_t volume_factor = 100;
+static float volume_scale = 1.0f;
 
 esp_err_t usb_uac_device_output_cb(uint8_t *buf, size_t len, void *arg)
 {
@@ -24,13 +24,33 @@ void usb_uac_device_set_mute_cb(uint32_t mute, void *arg)
 
 void usb_uac_device_set_volume_cb(uint32_t _volume, void *arg)
 {
-	int volume_db = _volume / 2 - 50;
-	volume_factor = pow(10, volume_db / 20.0f) * 100.0f;
+	int volume_db = (int)(_volume / 2U) - 50;
+	volume_scale = powf(10.0f, (float)volume_db / 20.0f);
+}
+
+static inline int16_t clamp_i16_from_float(float x)
+{
+    if (x > 32767.0f) return 32767;
+    if (x < -32768.0f) return -32768;
+    return (int16_t)x;
+}
+
+void apply_volume_and_mute(int16_t *pcm, size_t sample_count)
+{
+    if (pcm == NULL || sample_count == 0) return;
+    if (is_muted) {
+        memset(pcm, 0, sample_count * sizeof(int16_t));
+        return;
+    }
+    if (fabsf(volume_scale - 1.0f) < 1e-6f) return;
+    for (size_t i = 0; i < sample_count; ++i) {
+        pcm[i] = clamp_i16_from_float((float)pcm[i] * volume_scale);
+    }
 }
 
 void usb_uac_device_init(void)
 {
-	audio_ringbuf = xRingbufferCreate(192 * 16, RINGBUF_TYPE_BYTEBUF);
+	if (audio_ringbuf == NULL) audio_ringbuf = xRingbufferCreate(192 * 16, RINGBUF_TYPE_BYTEBUF);
 	
     uac_device_config_t config = {
         .output_cb = usb_uac_device_output_cb,

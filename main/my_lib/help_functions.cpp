@@ -9,9 +9,6 @@
 #include "glb_params.h"
 #include "auto_eq_help.h"
 #include "my_tasks.h"
-#include "ble_control.h"
-#include "dsps_biquad_gen.h"
-#include "dsps_biquad.h"
 #include <math.h>
 
 void bm83_tx_ind_init(void) {
@@ -152,27 +149,9 @@ void play_and_sample()
         vEventGroupDelete(sync_tasks);
         sync_tasks = NULL;
     }
-
     sync_tasks = xEventGroupCreate();
-    if (sync_tasks == NULL) {
-        calibration_in_progress = false;
-        ble_send_app_message("CAL_FAILED");
-        return;
-    }
-
-    BaseType_t s_ok = xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 12288, NULL,
-                                              configMAX_PRIORITIES - 1, NULL, CORE0);
-    BaseType_t w_ok = xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 12288, NULL,
-                                              configMAX_PRIORITIES - 1, NULL, CORE1);
-
-    if (s_ok != pdPASS || w_ok != pdPASS) {
-        if (sync_tasks != NULL) {
-            vEventGroupDelete(sync_tasks);
-            sync_tasks = NULL;
-        }
-        calibration_in_progress = false;
-        ble_send_app_message("CAL_FAILED");
-    }
+    xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE0);
+    xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
 }
 
 void swap_bytes_16bit(uint8_t *buf, size_t len)
@@ -188,17 +167,20 @@ esp_err_t my_dsps_biquad_gen_peakingEQ_f32(float *coeffs, float f, float gain_db
 {
     if (coeffs == NULL) return ESP_ERR_INVALID_ARG;
     if (qFactor <= 0.0001f) qFactor = 0.0001f;
+
     float A = powf(10.0f, gain_db / 40.0f);
     float w0 = 2.0f * (float)M_PI * f;
     float c = cosf(w0);
     float s = sinf(w0);
     float alpha = s / (2.0f * qFactor);
+
     float b0 = 1.0f + (alpha * A);
     float b1 = -2.0f * c;
     float b2 = 1.0f - (alpha * A);
     float a0 = 1.0f + (alpha / A);
     float a1 = -2.0f * c;
     float a2 = 1.0f - (alpha / A);
+
     coeffs[0] = b0 / a0;
     coeffs[1] = b1 / a0;
     coeffs[2] = b2 / a0;

@@ -37,7 +37,10 @@ void play_and_sample();
 // Function to load the WAV file and convert it to an array of samples
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples);
 
+// Swap 16-bit byte order in place
 void swap_bytes_16bit(uint8_t *buf, size_t len);
+
+// Generate peaking EQ biquad coefficients
 esp_err_t my_dsps_biquad_gen_peakingEQ_f32(float *coeffs, float f, float gain_db, float qFactor);
 
 

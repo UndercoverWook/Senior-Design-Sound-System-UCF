@@ -20,6 +20,9 @@ void usb_uac_device_set_volume_cb(uint32_t _volume, void *arg);
 // Initializes the USB UAC device with the specified configuration
 void usb_uac_device_init(void);
 
+// Applies current mute/volume settings to a PCM16 buffer
+void apply_volume_and_mute(int16_t *pcm, size_t sample_count);
+
 
 #ifdef __cplusplus
 }
