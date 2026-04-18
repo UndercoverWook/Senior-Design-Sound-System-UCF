@@ -88,7 +88,7 @@ class ControlPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = connected;
     final colorScheme = Theme.of(context).colorScheme;
-    final showSpectrum = calibrationActive || spectrum.isNotEmpty;
+    final showSpectrum = !calibrationActive && spectrum.isNotEmpty;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -112,7 +112,9 @@ class ControlPage extends StatelessWidget {
               calibrationActive ? Icons.hourglass_top : Icons.graphic_eq,
             ),
             label: Text(
-              calibrationActive ? "Calibration Running..." : "Start Calibration",
+              calibrationActive
+                  ? "Calibration Running..."
+                  : "Start Calibration",
             ),
           ),
 
@@ -127,7 +129,7 @@ class ControlPage extends StatelessWidget {
           const SizedBox(height: 20),
 
           const Text(
-            "Graphic EQ ±12 dB",
+            "Graphic EQ ±6 dB",
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           Container(

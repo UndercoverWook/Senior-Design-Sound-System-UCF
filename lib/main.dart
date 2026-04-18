@@ -5,14 +5,17 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_bluetooth/flutter_web_bluetooth.dart';
 
+import 'constants/app_theme_mode.dart';
+import 'constants/eq_bands.dart';
 import 'pages/control_page.dart';
 import 'pages/settings_page.dart';
+import 'widgets/animated_rainbow_background.dart';
 
 const String kDeviceName = "ESP32_AutoEQ";
 const String kServiceUuid = "12345678-1234-1234-1234-1234567890ab";
 const String kRxCharUuid = "abcd1234-5678-1234-5678-abcdef123456";
 const String kTxCharUuid = "abcd1234-5678-1234-5678-abcdef123457";
-const int kEqBandCount = 8;
+final int kEqBandCount = EqBands.centersHz.length;
 
 void main() {
   runApp(const MyApp());
@@ -48,9 +51,12 @@ class _MyAppState extends State<MyApp> {
   double _volume = 0.5;
   final List<double> _eqBands = List<double>.filled(kEqBandCount, 0.0);
   List<double> _spectrumData = [];
+  List<double> _pendingSpectrumData = [];
 
   bool _bluetoothOn = true;
-  bool _isDarkMode = true;
+  AppThemeMode _themeMode = AppThemeMode.dark;
+
+  bool get _isRainbowMode => _themeMode == AppThemeMode.rainbow;
 
   @override
   void dispose() {
@@ -63,58 +69,223 @@ class _MyAppState extends State<MyApp> {
   }
 
   ThemeData _buildLightTheme() {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: Colors.deepPurple,
+      brightness: Brightness.light,
+    );
+
     return ThemeData(
       brightness: Brightness.light,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: Colors.deepPurple,
-        brightness: Brightness.light,
-      ),
+      colorScheme: scheme,
       useMaterial3: true,
+      cardTheme: CardThemeData(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        backgroundColor: scheme.surface,
+        selectedItemColor: scheme.primary,
+        unselectedItemColor: Colors.black54,
+        type: BottomNavigationBarType.fixed,
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+      ),
     );
   }
 
   ThemeData _buildDarkTheme() {
+    final scheme = ColorScheme.fromSeed(
+      seedColor: Colors.deepPurple,
+      brightness: Brightness.dark,
+    );
+
     return ThemeData(
       brightness: Brightness.dark,
+      colorScheme: scheme,
+      useMaterial3: true,
+      cardTheme: CardThemeData(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        backgroundColor: scheme.surface,
+        selectedItemColor: scheme.primary,
+        unselectedItemColor: Colors.white54,
+        type: BottomNavigationBarType.fixed,
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+      ),
+    );
+  }
+
+  ThemeData _buildRainbowTheme() {
+    final base = ThemeData(
+      brightness: Brightness.dark,
       colorScheme: ColorScheme.fromSeed(
-        seedColor: Colors.deepPurple,
+        seedColor: const Color(0xFFD500F9),
         brightness: Brightness.dark,
+      ).copyWith(
+        primary: const Color(0xFFFFEA00),
+        onPrimary: Colors.black,
+        secondary: const Color(0xFF00E5FF),
+        onSecondary: Colors.black,
+        tertiary: const Color(0xFFFF80AB),
+        onTertiary: Colors.black,
+        surface: const Color(0x55120F2B),
+        onSurface: Colors.white,
+        onSurfaceVariant: const Color(0xFFE8E6FF),
+        outline: Colors.white.withOpacity(0.22),
+        surfaceContainerHighest: const Color(0x6622154A),
       ),
       useMaterial3: true,
     );
+
+    return base.copyWith(
+      scaffoldBackgroundColor: Colors.transparent,
+      canvasColor: Colors.transparent,
+      shadowColor: Colors.black.withOpacity(0.25),
+      dividerColor: Colors.white.withOpacity(0.15),
+      cardTheme: CardThemeData(
+        color: Colors.white.withOpacity(0.12),
+        elevation: 6,
+        shadowColor: Colors.black.withOpacity(0.25),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        backgroundColor: Colors.black.withOpacity(0.22),
+        elevation: 0,
+        selectedItemColor: const Color(0xFFFFEA00),
+        unselectedItemColor: Colors.white70,
+        type: BottomNavigationBarType.fixed,
+      ),
+      iconTheme: const IconThemeData(color: Colors.white),
+      textTheme: base.textTheme.apply(
+        bodyColor: Colors.white,
+        displayColor: Colors.white,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: const Color(0xE61A1032),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.white.withOpacity(0.18),
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: Colors.white.withOpacity(0.08),
+          disabledForegroundColor: Colors.white38,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+        ),
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return Colors.black;
+            }
+            return Colors.white;
+          }),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return const Color(0xFFFFEA00);
+            }
+            return Colors.white.withOpacity(0.10);
+          }),
+          side: WidgetStatePropertyAll(
+            BorderSide(color: Colors.white.withOpacity(0.25)),
+          ),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+        ),
+      ),
+      sliderTheme: base.sliderTheme.copyWith(
+        activeTrackColor: const Color(0xFFFFEA00),
+        inactiveTrackColor: Colors.white.withOpacity(0.20),
+        thumbColor: Colors.white,
+        overlayColor: Colors.white.withOpacity(0.12),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const Color(0xFFFFEA00);
+          }
+          return Colors.white;
+        }),
+        trackColor: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return const Color(0x8800E5FF);
+          }
+          return Colors.white.withOpacity(0.20);
+        }),
+      ),
+    );
+  }
+
+  ThemeData _currentTheme() {
+    switch (_themeMode) {
+      case AppThemeMode.light:
+        return _buildLightTheme();
+      case AppThemeMode.dark:
+        return _buildDarkTheme();
+      case AppThemeMode.rainbow:
+        return _buildRainbowTheme();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = _isDarkMode ? _buildDarkTheme() : _buildLightTheme();
+    final theme = _currentTheme();
+    final isDark = theme.brightness == Brightness.dark;
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: theme,
-      home: Builder(
-        builder: (context) {
-          final isDark = Theme.of(context).brightness == Brightness.dark;
-
-          return Scaffold(
-            body: SafeArea(child: _buildBody()),
-            bottomNavigationBar: BottomNavigationBar(
-              currentIndex: _currentIndex,
-              selectedItemColor: theme.colorScheme.primary,
-              unselectedItemColor: isDark ? Colors.white54 : Colors.black54,
-              onTap: (i) => setState(() => _currentIndex = i),
-              items: const [
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.equalizer),
-                  label: "Control",
-                ),
-                BottomNavigationBarItem(
-                  icon: Icon(Icons.settings),
-                  label: "Settings",
-                ),
-              ],
-            ),
-          );
-        },
+      home: AnimatedRainbowBackground(
+        enabled: _isRainbowMode,
+        child: Builder(
+          builder: (context) {
+            return Scaffold(
+              backgroundColor: _isRainbowMode ? Colors.transparent : null,
+              body: SafeArea(child: _buildBody()),
+              bottomNavigationBar: BottomNavigationBar(
+                currentIndex: _currentIndex,
+                backgroundColor: _isRainbowMode
+                    ? Colors.black.withOpacity(0.22)
+                    : theme.bottomNavigationBarTheme.backgroundColor,
+                selectedItemColor: theme.colorScheme.primary,
+                unselectedItemColor: _isRainbowMode
+                    ? Colors.white70
+                    : (isDark ? Colors.white54 : Colors.black54),
+                onTap: (i) => setState(() => _currentIndex = i),
+                items: const [
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.equalizer),
+                    label: "Control",
+                  ),
+                  BottomNavigationBarItem(
+                    icon: Icon(Icons.settings),
+                    label: "Settings",
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -155,8 +326,8 @@ class _MyAppState extends State<MyApp> {
           onToggleConnect: _toggleConnect,
           bluetoothOn: _bluetoothOn,
           onBluetooth: (b) => setState(() => _bluetoothOn = b),
-          isDarkMode: _isDarkMode,
-          onThemeToggle: (value) => setState(() => _isDarkMode = value),
+          themeMode: _themeMode,
+          onThemeModeChanged: (mode) => setState(() => _themeMode = mode),
         );
 
       default:
@@ -220,7 +391,6 @@ class _MyAppState extends State<MyApp> {
         continue;
       }
 
-      // Let the browser/OS settle before discovery.
       await Future.delayed(const Duration(milliseconds: 700));
 
       if (device.gatt?.connected != true) {
@@ -262,6 +432,7 @@ class _MyAppState extends State<MyApp> {
       _calibrationActive = false;
       _status = 'Requesting device...';
       _spectrumData = [];
+      _pendingSpectrumData = [];
     });
 
     BluetoothDevice device;
@@ -447,6 +618,7 @@ class _MyAppState extends State<MyApp> {
     _notifyReady = false;
     _calibrationActive = false;
     _spectrumData = [];
+    _pendingSpectrumData = [];
     _writeChain = Future.value();
 
     if (!silent && mounted) {
@@ -495,9 +667,13 @@ class _MyAppState extends State<MyApp> {
   Future<void> _sendEqCommand(int band, double value) async {
     if (band < 0 || band >= _eqDebounce.length) return;
 
+    final commandIds = EqBands.commandIds;
+    if (band >= commandIds.length) return;
+
     _eqDebounce[band]?.cancel();
     _eqDebounce[band] = Timer(const Duration(milliseconds: 90), () async {
-      await _sendText("EQ$band:${value.toStringAsFixed(1)}");
+      final commandId = commandIds[band];
+      await _sendText("EQ$commandId:${value.toStringAsFixed(1)}");
     });
   }
 
@@ -511,6 +687,7 @@ class _MyAppState extends State<MyApp> {
     setState(() {
       _calibrationActive = true;
       _spectrumData = [];
+      _pendingSpectrumData = [];
       _status = "Calibration running...";
     });
 
@@ -522,7 +699,11 @@ class _MyAppState extends State<MyApp> {
     if (parsed != null) {
       if (!mounted) return;
       setState(() {
-        _spectrumData = parsed;
+        if (_calibrationActive) {
+          _pendingSpectrumData = parsed;
+        } else {
+          _spectrumData = parsed;
+        }
       });
       return;
     }
@@ -541,6 +722,9 @@ class _MyAppState extends State<MyApp> {
         setState(() {
           _calibrationActive = false;
           _status = 'Calibration complete';
+          if (_pendingSpectrumData.isNotEmpty) {
+            _spectrumData = List<double>.from(_pendingSpectrumData);
+          }
         });
         return;
 

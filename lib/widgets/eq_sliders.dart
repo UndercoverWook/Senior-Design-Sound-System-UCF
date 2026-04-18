@@ -55,8 +55,8 @@ class EqSliders extends StatelessWidget {
                         child: RotatedBox(
                           quarterTurns: -1,
                           child: Slider(
-                            min: -12,
-                            max: 12,
+                            min: -6,
+                            max: 6,
                             divisions: 48,
                             value: i < values.length ? values[i] : 0,
                             onChanged: enabled ? (v) => onChange(i, v) : null,
