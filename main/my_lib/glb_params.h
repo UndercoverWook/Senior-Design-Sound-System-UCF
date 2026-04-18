@@ -48,8 +48,8 @@ extern "C" {
 
 
 // General parameters
-#define SAMPLE_RATE		 44100								 // Sample rate, 44.1kHz enough to avoid undersampling but 48kHz is cleaner
-#define TEST_DURATION	 5									 // Duration of Test Signal
+#define SAMPLE_RATE		 48000								 // Sample rate for calibration sweep
+#define TEST_DURATION	 4									 // Duration of calibration sweep in seconds
 #define BUFFER_FRAMES  	 4096            					 // frames (stereo frames) captured and transmitted 
 #define BYTES_PER_SAMPLE 2               					 // 16-bit => 2 bytes per channel sample
 #define CHANNELS         2									 // Stereo = 2 || Mono = 1
@@ -64,7 +64,7 @@ extern "C" {
 #define CORE0			 0
 #define CORE1			 1
 #define TRANSACTION_LENGTH 16             // 16 bits per sample from ADC
-#define N_SAMPLES		 (SAMPLE_RATE * TEST_DURATION)  // Number of samples to capture for testing (1 second worth of data at 48kHz)
+#define N_SAMPLES		 (SAMPLE_RATE * TEST_DURATION)  // Number of samples to capture for testing (4 seconds worth of data at 48kHz)
 #define FFT_CACHE_PATH   "/storage/fft_cache.bin"
 #define TASK_A_READY_BIT  BIT0
 #define TASK_B_READY_BIT  BIT1
@@ -107,6 +107,8 @@ extern fir_f32_s            global_eq;
 extern float cal_values [256][2];			// To store calibration values as a pair of values in a 2D array fashion
 static const uint32_t STACK_DEPTH = 4096;	// Stack allocation for FreeRTOS Tasks
 extern bool activate_eq;                    // Global flag to indicate whether to apply EQ or not 
+extern volatile bool wav_playback_active;     // True while the standalone WAV playback task is active
+extern volatile bool calibration_in_progress; // True while Auto-EQ calibration is running
 
 // TAGS:
 extern const char *STORAGE_TAG;

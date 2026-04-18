@@ -4,11 +4,104 @@
 #include "auto_eq_help.h"
 #include "config_functions.h"
 #include "my_usb_device.h"
+#include "ble_control.h"
 
+static bool load_and_expand_wav_to_buffer(
+    wave_reader_handle_t wav,
+    uint32_t wav_channels,
+    bool expand_mono_to_stereo,
+    size_t target_input_bytes,
+    uint8_t *stereo_out,
+    size_t stereo_out_capacity,
+    size_t *actual_input_bytes,
+    size_t *actual_output_bytes)
+{
+    if (!wav || !stereo_out || !actual_input_bytes || !actual_output_bytes) {
+        return false;
+    }
+
+    uint8_t *read_buf = (uint8_t *)heap_caps_malloc(BUFFER_BYTES, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    if (read_buf == NULL) {
+        return false;
+    }
+
+    size_t pos = 0;
+    size_t total_in = 0;
+    size_t total_out = 0;
+    const size_t max_input_chunk = expand_mono_to_stereo ? (BUFFER_BYTES / 2U) : BUFFER_BYTES;
+
+    while (total_in < target_input_bytes && total_out < stereo_out_capacity) {
+        size_t input_left = target_input_bytes - total_in;
+        size_t read_size = (input_left < max_input_chunk) ? input_left : max_input_chunk;
+        size_t bytes_read = wave_read_raw_data(wav, read_buf, pos, read_size);
+        if (bytes_read == 0) {
+            break;
+        }
+
+        pos += bytes_read;
+        total_in += bytes_read;
+
+        if (expand_mono_to_stereo) {
+            size_t sample_count = bytes_read / sizeof(int16_t);
+            if ((total_out + (sample_count * FRAME_SIZE_BYTES)) > stereo_out_capacity) {
+                free(read_buf);
+                return false;
+            }
+
+            const int16_t *src = (const int16_t *)read_buf;
+            int16_t *dst = (int16_t *)(stereo_out + total_out);
+            for (size_t i = 0; i < sample_count; ++i) {
+                dst[(i * 2U) + 0U] = src[i];
+                dst[(i * 2U) + 1U] = src[i];
+            }
+            total_out += sample_count * FRAME_SIZE_BYTES;
+        } else {
+            if ((total_out + bytes_read) > stereo_out_capacity) {
+                free(read_buf);
+                return false;
+            }
+            memcpy(stereo_out + total_out, read_buf, bytes_read);
+            total_out += bytes_read;
+        }
+    }
+
+    free(read_buf);
+    *actual_input_bytes = total_in;
+    *actual_output_bytes = total_out;
+    return true;
+}
+
+static void finish_calibration_run(bool success)
+{
+    EventGroupHandle_t eg = sync_tasks;
+    sync_tasks = NULL;
+
+    calibration_in_progress = false;
+    if (success) {
+        ble_send_app_message("CAL_DONE");
+    } else {
+        ble_send_app_message("CAL_FAILED");
+    }
+
+    if (eg != NULL) {
+        vEventGroupDelete(eg);
+    }
+
+    if (bt_task && eTaskGetState(bt_task) == eSuspended) {
+        vTaskResume(bt_task);
+    }
+}
 
 void vSample_task(void *args)
 {
-	configure_spi();
+    configure_spi();
+    initialize_pacer_timer(&sync_timer);
+
+    if (spi_hdl == NULL || sync_timer == NULL) {
+        finish_calibration_run(false);
+        vTaskDelete(NULL);
+        return;
+    }
 
     spi_transaction_t spi_t {
         .flags      = SPI_TRANS_USE_RXDATA,
@@ -16,132 +109,223 @@ void vSample_task(void *args)
         .rxlength   = TRANSACTION_LENGTH,
     };
 
-    uint16_t *samples = (uint16_t *)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);  // Sample Data array
-    
-	xEventGroupSync(
-        sync_tasks,
-        TASK_A_READY_BIT,   // bit this task sets
-        ALL_TASKS_READY,    // bits to wait for
-        portMAX_DELAY
-    );
+    uint16_t *samples = (uint16_t *)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (samples == NULL) {
+        finish_calibration_run(false);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    xEventGroupSync(sync_tasks, TASK_A_READY_BIT, ALL_TASKS_READY, portMAX_DELAY);
+
+    ESP_ERROR_CHECK(gptimer_set_raw_count(sync_timer, 0));
+    ESP_ERROR_CHECK(gptimer_start(sync_timer));
+
+    uint64_t step_fp = (((uint64_t)PACER_TIMER_HZ) << 32) / SAMPLE_RATE;
+    uint64_t next_tick_fp = step_fp;
 
     uint32_t t_start = esp_log_timestamp();
     for (int i = 0; i < N_SAMPLES; i++) {
-        spi_device_polling_transmit(spi_hdl, &spi_t);  // Transmit the SPI transaction
-        uint32_t raw_res = ((uint32_t)spi_t.rx_data[0] << 16) | 
-                           ((uint32_t)spi_t.rx_data[1] <<  8) | 
+        uint64_t target_tick = next_tick_fp >> 32;
+        uint64_t now = 0;
+        do {
+            ESP_ERROR_CHECK(gptimer_get_raw_count(sync_timer, &now));
+        } while (now < target_tick);
+        next_tick_fp += step_fp;
+
+        spi_device_polling_transmit(spi_hdl, &spi_t);
+        uint32_t raw_res = ((uint32_t)spi_t.rx_data[0] << 16) |
+                           ((uint32_t)spi_t.rx_data[1] <<  8) |
                             (uint32_t)spi_t.rx_data[2];
-        samples[i] = (raw_res >> 2) & 0xFFFF;  // Store only the lower 16 bits (the actual ADC value)
+        samples[i] = (raw_res >> 2) & 0xFFFF;
     }
     uint32_t t_end = esp_log_timestamp();
-	
-	ESP_LOGI(SAMPLING_TAG, "Started: %u | Finished %u", t_start, t_end);
+    ESP_ERROR_CHECK(gptimer_stop(sync_timer));
 
-	// Calculate actual sampling frequency
+    ESP_LOGI(SAMPLING_TAG, "Started: %u | Finished %u", t_start, t_end);
     float actual_fs = (float)N_SAMPLES / ((t_end - t_start) / 1000.0f);
-	ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
+    ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
 
-    float* fir_taps = run_Auto_EQ_algorithm(samples, actual_fs);
+    float *fir_taps = run_Auto_EQ_algorithm(samples, actual_fs);
+    if (fir_taps == NULL) {
+        finish_calibration_run(false);
+        vTaskDelete(NULL);
+        return;
+    }
+    (void)fir_taps;
 
-	vTaskResume(bt_task);	// Resume once FIR coefficients are calculated
-
-    vTaskDelete(NULL);  // Delete the task when done
+    finish_calibration_run(true);
+    vTaskDelete(NULL);
 }
 
 void vPlay_WAV_task(void* args)
-{	
-	// Check status of BT module (if busy, suspend)
-	eTaskState bt_state  = eTaskGetState(bt_task);
-	//eTaskState usb_state = eTaskGetState(usb_task);
+{
+    wav_playback_active = true;
+    wave_reader_handle_t local_wav_hdl = NULL;
 
-	if (bt_state == eRunning)
-	{
-		i2s_channel_disable(mcu_rx);
-		i2s_channel_disable(mcu_tx);
-		vTaskSuspend(bt_task);
-	}// else if (usb_state == eRunning)
-	// {
-	// 	i2s_channel_disable(mcu_tx);
-	// 	vTaskSuspend(usb_task);
-	// }
+    wave_header_t wav_head;
+    local_wav_hdl = wave_reader_open("/storage/48k_4sec_sweep.wav");
+    if (local_wav_hdl == NULL) {
+        ESP_LOGE(WAV_TAG, "Unable to open WAV file");
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
+        }
+        vTaskDelete(NULL);
+        return;
+    }
 
-	configure_i2s_for_wav();
+    if (wave_read_header(local_wav_hdl, &wav_head) != 0) {
+        ESP_LOGE(WAV_TAG, "Unable to read WAV file header");
+        wave_reader_close(local_wav_hdl);
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
+        }
+        vTaskDelete(NULL);
+        return;
+    }
 
-	wave_header_t wav_head;
-	wav_hdl = wave_reader_open("/storage/stereo_sweep.wav");
-			
-	if (wav_hdl == NULL) {
-		ESP_LOGE(WAV_TAG, "Unable to open read!");
-		vTaskDelete(NULL);
-	}
-		
-	if (wave_read_header(wav_hdl, &wav_head) != 0) {
-		ESP_LOGE(WAV_TAG, "Unable to read WAV file header!");
-		vTaskDelete(NULL);
-	}
-		
-	uint8_t *buff = (uint8_t *)calloc(1, BUFFER_BYTES);	// Allocate space to store data coming from BT module
-	assert(buff);	
-	size_t wrote, pos = 0;
+    print_wav(&wav_head);
+    const uint32_t wav_sample_rate = (wav_head.sample_rate > 0) ? wav_head.sample_rate : SAMPLE_RATE;
+    const uint32_t wav_channels = (wav_head.n_channels > 0) ? wav_head.n_channels : 1U;
+    const uint32_t wav_bytes_per_sample = (wav_head.bytes_per_sample > 0) ? wav_head.bytes_per_sample : BYTES_PER_SAMPLE;
 
-	xEventGroupSync(
-        sync_tasks,
-        TASK_B_READY_BIT,
-        ALL_TASKS_READY,
-        portMAX_DELAY
-    );
+    if (wav_bytes_per_sample != 2U) {
+        ESP_LOGE(WAV_TAG, "Unsupported WAV format: expected 16-bit PCM, got %lu bytes/sample",
+                 (unsigned long)wav_bytes_per_sample);
+        wave_reader_close(local_wav_hdl);
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
+        }
+        vTaskDelete(NULL);
+        return;
+    }
 
-	uint32_t t_start = esp_log_timestamp();
-	while (1)
-	{
-		size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);		// Read from WAV file
-			
-		if (bytes_read == 0){
-			break;
-		}
-			
-		pos += bytes_read;
-		size_t bytes_to_w = bytes_read;
-		uint8_t *p = buff;
-			
-		while (bytes_to_w > 0) {
-			wrote = 0;
-			uint32_t elapsed   = esp_log_timestamp() - t_start;
-			uint32_t remaining = (elapsed < 5000) ? (5000 - elapsed) : 0;
+    const bool expand_mono_to_stereo = (wav_channels == 1U);
+    const bool stereo_output = true;
+    const size_t target_input_bytes = (size_t)((uint64_t)wav_head.samples_per_channel * wav_channels * wav_bytes_per_sample);
+    const size_t target_output_bytes = expand_mono_to_stereo ? (target_input_bytes * 2U) : target_input_bytes;
 
-			esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, pdMS_TO_TICKS(remaining));	
-				
-			if (r != ESP_OK){
-				break;
-			}
-				
-			if (wrote == 0) {
-				vTaskDelay(pdMS_TO_TICKS(1));
-				continue;
-			}
-			bytes_to_w -= wrote;
-			p += wrote;
-		}// end of inner while loop
-			
-	}// end of main while loop 
-	uint32_t t_end = esp_log_timestamp();
+    ESP_LOGI(WAV_TAG,
+             "Playback path: file_channels=%lu, expand_mono_to_stereo=%s, target_in=%u bytes, target_out=%u bytes",
+             (unsigned long)wav_channels,
+             expand_mono_to_stereo ? "true" : "false",
+             (unsigned)target_input_bytes,
+             (unsigned)target_output_bytes);
 
-	ESP_LOGI(WAV_TAG, "Started: %u | Finished %u", t_start, t_end);
-		
-	i2s_channel_disable(mcu_tx);
-	wave_reader_close(wav_hdl);	// close wav file
-	free(buff);
-	vTaskDelete(NULL);
+    uint8_t *playback_buf = (uint8_t *)heap_caps_malloc(target_output_bytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    if (playback_buf == NULL) {
+        ESP_LOGE(WAV_TAG, "Unable to allocate playback buffer (%u bytes)", (unsigned)target_output_bytes);
+        wave_reader_close(local_wav_hdl);
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    size_t total_input_bytes = 0;
+    size_t total_output_bytes = 0;
+    bool loaded_ok = load_and_expand_wav_to_buffer(local_wav_hdl,
+                                                   wav_channels,
+                                                   expand_mono_to_stereo,
+                                                   target_input_bytes,
+                                                   playback_buf,
+                                                   target_output_bytes,
+                                                   &total_input_bytes,
+                                                   &total_output_bytes);
+    wave_reader_close(local_wav_hdl);
+    local_wav_hdl = NULL;
+
+    if (!loaded_ok || total_input_bytes != target_input_bytes || total_output_bytes != target_output_bytes) {
+        ESP_LOGE(WAV_TAG, "Failed to preload WAV data correctly: read=%u/%u wrote=%u/%u",
+                 (unsigned)total_input_bytes,
+                 (unsigned)target_input_bytes,
+                 (unsigned)total_output_bytes,
+                 (unsigned)target_output_bytes);
+        free(playback_buf);
+        configure_i2s_for_audio(true);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            calibration_in_progress = false;
+            ble_send_app_message("ERR:PLAY_WAV");
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    configure_i2s_for_wav(wav_sample_rate, stereo_output);
+    if (mcu_tx == NULL) {
+        ESP_LOGE(WAV_TAG, "WAV I2S TX channel was not created");
+        free(playback_buf);
+        wav_playback_active = false;
+        if (calibration_in_progress) {
+            finish_calibration_run(false);
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (calibration_in_progress && sync_tasks != NULL) {
+        xEventGroupSync(sync_tasks, TASK_B_READY_BIT, ALL_TASKS_READY, portMAX_DELAY);
+    }
+
+    uint32_t t_start = esp_log_timestamp();
+    size_t bytes_left = total_output_bytes;
+    uint8_t *p = playback_buf;
+    while (bytes_left > 0) {
+        size_t wrote = 0;
+        esp_err_t r = i2s_channel_write(mcu_tx, p, bytes_left, &wrote, portMAX_DELAY);
+        if (r != ESP_OK) {
+            ESP_LOGE(WAV_TAG, "i2s_channel_write failed after %u ms, output=%u/%u bytes: %s",
+                     (unsigned)(esp_log_timestamp() - t_start),
+                     (unsigned)(total_output_bytes - bytes_left),
+                     (unsigned)total_output_bytes,
+                     esp_err_to_name(r));
+            if (calibration_in_progress) {
+                finish_calibration_run(false);
+            }
+            break;
+        }
+
+        if (wrote == 0) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
+        bytes_left -= wrote;
+        p += wrote;
+    }
+    uint32_t t_end = esp_log_timestamp();
+
+    ESP_LOGI(WAV_TAG, "Started: %u | Finished %u | Read %u / %u bytes | Wrote %u / %u bytes",
+             t_start,
+             t_end,
+             (unsigned)total_input_bytes,
+             (unsigned)target_input_bytes,
+             (unsigned)(total_output_bytes - bytes_left),
+             (unsigned)target_output_bytes);
+
+    free(playback_buf);
+    configure_i2s_for_audio(true);
+    wav_playback_active = false;
+    vTaskDelete(NULL);
 }
 
 void vUSB_playback_task(void *arg)
 {
-	configure_i2s_for_audio(false);	// Set bluetooth == false
-    usb_uac_device_init();			// Initialize USB UAC device class
-
-	// gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0); // Lowest drive
-    // gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
-    // gpio_set_drive_capability(I2S_TX_LINE, GPIO_DRIVE_CAP_0);
+    configure_i2s_for_audio(false);
+    usb_uac_device_init();
 
     while (1) {
         size_t bytes_received = 0;
@@ -152,92 +336,84 @@ void vUSB_playback_task(void *arg)
             vRingbufferReturnItem(audio_ringbuf, data);
         }
     }
-	vTaskDelete(NULL);
+    vTaskDelete(NULL);
 }
 
 void vBT_playback_task(void *arg)
 {
-	bm83_tx_ind_init();
-	// Wait for BT inidication of Paired Device
-	while (1) {
+    bm83_tx_ind_init();
+    while (1) {
         int level = gpio_get_level(MCU_WAKE);
-		if (level == 0) break;
+        if (level == 0) break;
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 
-	ESP_LOGI(BM83_TAG, "BM83 Transmitting!");
-	configure_i2s_for_audio(true);
-	ESP_LOGI(BM83_TAG, "I2S Configured");
+    ESP_LOGI(BM83_TAG, "BM83 Transmitting!");
+    configure_i2s_for_audio(true);
+    ESP_LOGI(BM83_TAG, "I2S Configured");
 
-	uint8_t *bt_buff = (uint8_t *)heap_caps_malloc(BUFFER_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);	// Initialize array to store data coming from BT module
-	assert(bt_buff);	
-	
-	size_t bytes_read;
-	size_t wrote = 0;
+    uint8_t *bt_buff = (uint8_t *)heap_caps_malloc(BUFFER_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    assert(bt_buff);
 
-	gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
+    size_t bytes_read;
+    size_t wrote = 0;
+
+    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
     gpio_pullup_dis(GPIO_NUM_2);
     gpio_pulldown_dis(GPIO_NUM_2);
-	gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
+    gpio_set_direction(GPIO_NUM_2, GPIO_MODE_INPUT);
 
     esp_rom_gpio_connect_out_signal(GPIO_NUM_2, 0x100, false, false);
     esp_rom_gpio_connect_in_signal(GPIO_NUM_2, 25, false);
 
-    gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0); // Lowest drive
+    gpio_set_drive_capability(I2S_BIT_CLK, GPIO_DRIVE_CAP_0);
     gpio_set_drive_capability(I2S_LRCLK_PIN, GPIO_DRIVE_CAP_0);
-   	gpio_set_drive_capability(I2S_TX_LINE, GPIO_DRIVE_CAP_0);
+    gpio_set_drive_capability(I2S_TX_LINE, GPIO_DRIVE_CAP_0);
 
-	gpio_config_t io_conf = {
-		.pin_bit_mask = (1ULL << GPIO_NUM_2),
-		.mode = GPIO_MODE_INPUT,
-		.pull_up_en = GPIO_PULLUP_DISABLE,
-		.pull_down_en = GPIO_PULLDOWN_DISABLE,
-		.intr_type = GPIO_INTR_DISABLE,
-	};
-	gpio_config(&io_conf);
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << GPIO_NUM_2),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
 
-	int num_samples = BUFFER_BYTES / 2; 
-	float *float_conv_buff = (float *)heap_caps_malloc(num_samples * sizeof(float), MALLOC_CAP_INTERNAL);
-		
-	// Read bytes from the Bluetooth Module (MCU acts as Receiver) and echo/send it to the DAC (MCU acts as Sender)
-	while (1)
-	{
-		esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, portMAX_DELAY);
+    int num_samples = BUFFER_BYTES / 2;
+    float *float_conv_buff = (float *)heap_caps_malloc(num_samples * sizeof(float), MALLOC_CAP_INTERNAL);
+    (void)float_conv_buff;
 
-		// Process 16-bit data to float for FIR processing (convert back to 16-bit for DAC)
-		// if (activate_eq && bytes_read > 0) {
-		// 	int16_t *raw_samples = (int16_t *)bt_buff;
-		// 	int sample_count = bytes_read / 2;
+    while (1)
+    {
+        if (wav_playback_active || calibration_in_progress) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
 
-		// 	for (int i = 0; i < sample_count; i++) {
-		// 		float_conv_buff[i] = (raw_samples[i] / 32768.0f) * 0.25f;
-		// 	}
+        if (mcu_rx == NULL || mcu_tx == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
+        }
 
-		// 	dsps_fir_f32_aes3(&global_eq, float_conv_buff, float_conv_buff, sample_count);
+        esp_err_t r = i2s_channel_read(mcu_rx, bt_buff, BUFFER_BYTES, &bytes_read, pdMS_TO_TICKS(10));
+        if (r != ESP_OK || bytes_read == 0) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
 
-		// 	for (int i = 0; i < sample_count; i++) {
-		// 		float val = float_conv_buff[i] * 32768.0f;
-		// 		if (val > 32767.0f) val = 32767.0f;
-		// 		if (val < -32768.0f) val = -32768.0f;
-		// 		raw_samples[i] = (int16_t)val;
-		// 	}
-		// }
-		
-		size_t bytes_to_w = bytes_read;
-		uint8_t *p = bt_buff;
-		
-		while (bytes_to_w > 0)
-		{			
-			ESP_ERROR_CHECK(i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY));
-			bytes_to_w -= wrote;		// If written -> OK, then decrease counter
-			p += wrote;					// Increase pointer to buffer			
-		}// end of inner while loop
-	}// end of main while loop
+        size_t bytes_to_w = bytes_read;
+        uint8_t *p = bt_buff;
 
-	ESP_LOGW(BM83_TAG, "Bluetooth device disconnected");
-	
-	free(bt_buff);
-	i2s_channel_disable(mcu_tx);
-	i2s_channel_disable(mcu_rx);
-	vTaskDelete(NULL);
+        while (bytes_to_w > 0)
+        {
+            ESP_ERROR_CHECK(i2s_channel_write(mcu_tx, p, bytes_to_w, &wrote, portMAX_DELAY));
+            bytes_to_w -= wrote;
+            p += wrote;
+        }
+    }
+
+    free(bt_buff);
+    i2s_channel_disable(mcu_tx);
+    i2s_channel_disable(mcu_rx);
+    vTaskDelete(NULL);
 }

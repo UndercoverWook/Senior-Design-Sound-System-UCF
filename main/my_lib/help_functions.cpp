@@ -9,6 +9,7 @@
 #include "glb_params.h"
 #include "auto_eq_help.h"
 #include "my_tasks.h"
+#include "ble_control.h"
 #include <math.h>
 
 void bm83_tx_ind_init(void) {
@@ -62,9 +63,9 @@ void emm6_file_to_arr()
 
 int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
 {
-    wav_hdl = wave_reader_open(filename);
+    wave_reader_handle_t local_wav_hdl = wave_reader_open(filename);
 
-    if (wav_hdl == NULL) {
+    if (local_wav_hdl == NULL) {
         ESP_LOGE(WAV_TAG, "Unable to open file: %s", filename);
         return -1;
     }
@@ -72,7 +73,7 @@ int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
     uint8_t* buff = (uint8_t*)calloc(1, BUFFER_BYTES);
     if (buff == NULL) {
         ESP_LOGE(WAV_TAG, "Failed to allocate buffer");
-        wave_reader_close(wav_hdl);
+        wave_reader_close(local_wav_hdl);
         return -1;
     }
 
@@ -81,7 +82,7 @@ int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
 
     while (sample_count < max_samples)
     {
-        size_t bytes_read = wave_read_raw_data(wav_hdl, buff, pos, BUFFER_BYTES);
+        size_t bytes_read = wave_read_raw_data(local_wav_hdl, buff, pos, BUFFER_BYTES);
 
         if (bytes_read == 0) {
             break;  // End of file
@@ -98,7 +99,7 @@ int load_wav_to_array(const char* filename, uint16_t* samples, int max_samples)
         }
     }
 
-    wave_reader_close(wav_hdl);
+    wave_reader_close(local_wav_hdl);
     free(buff);
 
     ESP_LOGI(WAV_TAG, "Loaded %d samples from %s", sample_count, filename);
@@ -135,7 +136,7 @@ float* load_fft_cache(int num_bins)
 float* wav_to_fft()
 {
     uint16_t* samples = (uint16_t*)heap_caps_malloc(N_SAMPLES * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
-    int count = load_wav_to_array("/storage/stereo_sweep.wav", samples, N_SAMPLES);
+    int count = load_wav_to_array("/storage/48k_4sec_sweep.wav", samples, N_SAMPLES);
 
     float* wav_fft = compute_fft(samples, count, SAMPLE_RATE);
     free(samples);
@@ -145,7 +146,29 @@ float* wav_to_fft()
 
 void play_and_sample()
 {
+    if (sync_tasks != NULL) {
+        vEventGroupDelete(sync_tasks);
+        sync_tasks = NULL;
+    }
+
     sync_tasks = xEventGroupCreate();
-    xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE0);
-    xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 8192, NULL, configMAX_PRIORITIES - 1, NULL, CORE1);
+    if (sync_tasks == NULL) {
+        calibration_in_progress = false;
+        ble_send_app_message("CAL_FAILED");
+        return;
+    }
+
+    BaseType_t s_ok = xTaskCreatePinnedToCore(vSample_task, "ADC Sampling", 12288, NULL,
+                                              configMAX_PRIORITIES - 1, NULL, CORE0);
+    BaseType_t w_ok = xTaskCreatePinnedToCore(vPlay_WAV_task, "WAV Playback", 12288, NULL,
+                                              configMAX_PRIORITIES - 1, NULL, CORE1);
+
+    if (s_ok != pdPASS || w_ok != pdPASS) {
+        if (sync_tasks != NULL) {
+            vEventGroupDelete(sync_tasks);
+            sync_tasks = NULL;
+        }
+        calibration_in_progress = false;
+        ble_send_app_message("CAL_FAILED");
+    }
 }

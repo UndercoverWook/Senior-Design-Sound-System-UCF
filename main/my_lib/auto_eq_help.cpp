@@ -15,6 +15,7 @@
 #include "auto_eq_help.h"
 #include "help_functions.h"
 #include "glb_params.h"
+#include "ble_control.h"
 
 static const int CAL_NUM_POINTS = 256;
 static const float CAL_SENSITIVITY_1KHZ = -38.1f;  // dB re 1V/Pa at 1kHz
@@ -61,28 +62,33 @@ void correction_ifft(float* correction_curve, int n)
 
 float* calculate_correction_curve(float *H, int n) 
 {
-    float *correction = (float *)heap_caps_malloc(2 * FFT_SIZE * sizeof(float), MALLOC_CAP_8BIT);
+    float *correction = (float *)heap_caps_malloc((size_t)(2 * n) * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     float max_gain = 4.0f; // +12dB max boost
 
-    for (int i = 0; i < n * 2; i++) {
-        float re = H[i*2 + 0];
-        float im = H[i*2 + 1];
-        float mag_sq = re*re + im*im + 1e-9f;
+    if (correction == NULL || H == NULL) {
+        if (correction != NULL) free(correction);
+        return NULL;
+    }
+
+    for (int i = 0; i < n; i++) {
+        float re = H[i * 2 + 0];
+        float im = H[i * 2 + 1];
+        float mag_sq = re * re + im * im + 1e-9f;
         
         // 1) Invert the complex number: 1/Z = conj(Z) / |Z|^2
         float inv_re = re / mag_sq;
         float inv_im = -im / mag_sq;
 
         // 2) Cap the Gain based on Magnitude
-        float inv_mag = sqrtf(inv_re*inv_re + inv_im*inv_im);
+        float inv_mag = sqrtf(inv_re * inv_re + inv_im * inv_im);
         if (inv_mag > max_gain) {
             float scale = max_gain / inv_mag;
             inv_re *= scale;
             inv_im *= scale;
         }
 
-        correction[i*2 + 0] = inv_re;
-        correction[i*2 + 1] = inv_im;
+        correction[i * 2 + 0] = inv_re;
+        correction[i * 2 + 1] = inv_im;
     }
     
     return correction;
@@ -90,24 +96,28 @@ float* calculate_correction_curve(float *H, int n)
 
 float* compute_wiener_deconvolution(float *X, float *Y, int n) 
 {
-   float reg_factor = 0.01f;
-    
-    // Complex data has 2 floats per bin. Loop must go to n * 2.
-    for (int i = 0; i < n * 2; i += 2) { 
+   const float reg_factor = 0.01f;
+
+    if (X == NULL || Y == NULL) {
+        return NULL;
+    }
+
+    float *H = (float *)heap_caps_malloc((size_t)(2 * n) * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (H == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < n * 2; i += 2) {
         float x_re = X[i],     x_im = X[i+1];
         float y_re = Y[i],     y_im = Y[i+1];
 
         float x_mag_sq = x_re*x_re + x_im*x_im;
         float divisor  = x_mag_sq + reg_factor;
 
-        // Perform complex division: (Y / X)
-        Y[i]   = (y_re * x_re + y_im * x_im) / divisor;
-        Y[i+1] = (y_im * x_re - y_re * x_im) / divisor;
-
-       // ESP_LOGI(EQ_TAG, "real: %f  |  imag: %f", Y[i], Y[i+1]);
+        H[i]   = (y_re * x_re + y_im * x_im) / divisor;
+        H[i+1] = (y_im * x_re - y_re * x_im) / divisor;
     }
-    free(X); // Correctly freeing the reference buffer
-    return Y;
+    return H;
 }
     
 float apply_emm6_calibration(float freq_hz)
@@ -225,46 +235,64 @@ void normalize_taps(float* taps)
 
 float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
 {   
-    // Initialize FFT tables (must be done before calling any FFT functions) and compute FFT
     esp_err_t err = dsps_fft2r_init_fc32(NULL, FFT_SIZE);
     if (err != ESP_OK) {
         ESP_LOGE("FFT", "Failed to initialize FFT, ERROR: %s", esp_err_to_name(err));
+        free(samples);
+        return NULL;
     } else {
         ESP_LOGI(EQ_TAG, "FFT Initialized!");
     }
 
-    // Make wav file to FFT
     float *wav_fft = wav_to_fft();
-
-    // Load calibration file to array before applying calibration
     emm6_file_to_arr();
 
-    float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq);   // Apply calibration to get "true" magnitudes
+    float *sample_fft = compute_fft(samples, N_SAMPLES, actual_freq);
     free(samples);
-    
-    // Apply calibration to samples FFT
+    samples = NULL;
+
+    if (wav_fft == NULL || sample_fft == NULL) {
+        ESP_LOGE(EQ_TAG, "FFT generation failed: wav_fft=%p sample_fft=%p", wav_fft, sample_fft);
+        if (wav_fft != NULL) free(wav_fft);
+        if (sample_fft != NULL) free(sample_fft);
+        dsps_fft2r_deinit_fc32();
+        return NULL;
+    }
+
     apply_calibration_to_fft(sample_fft, actual_freq);
-    show_FFT(sample_fft, NUM_BINS, actual_freq);
+    ble_publish_fft_bins_from_complex(sample_fft, actual_freq);
+    //show_FFT(sample_fft, NUM_BINS, actual_freq);
 
-    // Compute Wiener deconvolution on the magnitudes
     float *H = compute_wiener_deconvolution(wav_fft, sample_fft, FFT_SIZE);
-
-    // Calculate correction curve based on Target Curve (1.0 across all bins)
-    // and the computed H (system response) using Wiener deconvolution
-    float *correction_curve = calculate_correction_curve(H, FFT_SIZE);
-    free(sample_fft);
     free(wav_fft);
+    wav_fft = NULL;
+    free(sample_fft);
+    sample_fft = NULL;
 
-    // Turn correction curve into FIR filter coefficients (IFFT)
+    if (H == NULL) {
+        ESP_LOGE(EQ_TAG, "Wiener deconvolution failed");
+        dsps_fft2r_deinit_fc32();
+        return NULL;
+    }
+
+    float *correction_curve = calculate_correction_curve(H, FFT_SIZE);
+    free(H);
+    H = NULL;
+    if (correction_curve == NULL) {
+        ESP_LOGE(EQ_TAG, "Correction curve allocation failed");
+        dsps_fft2r_deinit_fc32();
+        return NULL;
+    }
+
     correction_ifft(correction_curve, FFT_SIZE);
 
-    float *final_taps = (float *)heap_caps_calloc(FFT_SIZE, sizeof(float), MALLOC_CAP_INTERNAL);
-    float *window = (float *)malloc(FFT_SIZE * sizeof(float));
+    float *final_taps = (float *)heap_caps_calloc(FFT_SIZE, sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    float *window = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
     if (!final_taps || !window) {
         ESP_LOGE(EQ_TAG, "Tap/window alloc failed");
-        free(final_taps);
-        free(window);
+        if (final_taps) free(final_taps);
+        if (window) free(window);
         free(correction_curve);
         dsps_fft2r_deinit_fc32();
         return NULL;
@@ -272,7 +300,6 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
 
     dsps_wind_hann_f32(window, FFT_SIZE);
 
-    // This moves the impulse from t=0 to the center of the buffer (Circular Shift)
     for (int i = 0; i < FFT_SIZE; i++) {
         int shifted_idx = (i + (FFT_SIZE / 2)) % FFT_SIZE;
         float raw_tap = correction_curve[shifted_idx * 2];
@@ -280,17 +307,9 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
     }
 
     free(window);
-    free(correction_curve);
-    
-    // Normalize final taps for FIR design
+ //   free(correction_curve);
+
     normalize_taps(final_taps);
-
-    // for (int i = 0; i < FFT_SIZE/8; i++) {
-    //     ESP_LOGI(EQ_TAG, "%f", final_taps[i]);
-    //     vTaskDelay(pdMS_TO_TICKS(10));          // Feed the Watchdog
-    // }
-
     dsps_fft2r_deinit_fc32();
-
     return final_taps;
 }

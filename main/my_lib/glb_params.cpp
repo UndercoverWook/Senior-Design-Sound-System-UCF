@@ -20,6 +20,8 @@ EventGroupHandle_t   sync_tasks    = NULL;
 
 float cal_values[256][2]    = {};
 bool activate_eq = false;
+volatile bool wav_playback_active = false;
+volatile bool calibration_in_progress = false;
 
 const char *STORAGE_TAG  = "File System";
 const char *SPI_TAG      = "SPI Configuration";

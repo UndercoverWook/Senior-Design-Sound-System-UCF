@@ -4,6 +4,7 @@ idf_component_register(
     		"my_lib/glb_params.cpp"
     		"my_lib/help_functions.cpp"
             "my_lib/auto_eq_help.cpp"
+            "my_lib/ble_control.cpp"
             "my_lib/my_usb_device.cpp"
             "my_lib/my_tasks.cpp"
     INCLUDE_DIRS    "."
@@ -17,5 +18,7 @@ idf_component_register(
                 freertos 
                 esp_ringbuf 
                 esp_driver_uart 
+                bt
+                nvs_flash
 )
 spiffs_create_partition_image(storage ../partition FLASH_IN_PROJECT)
