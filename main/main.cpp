@@ -14,9 +14,9 @@ extern "C" void app_main(void)
     reconfigure_wdt();
     ble_control_init();
 
-    xTaskCreatePinnedToCore(vBT_playback_task, "BT Playback", 8192, NULL, 5, &bt_task, CORE1);
+    //xTaskCreatePinnedToCore(vBT_playback_task, "BT Playback", 8192, NULL, 5, &bt_task, CORE1);
     // Leave USB playback task disabled during BLE/Auto-EQ testing so it does not occupy I2S0.
-    // xTaskCreatePinnedToCore(vUSB_playback_task, "USB Playback", 8192, NULL, 10, &usb_task, CORE0);
+    xTaskCreatePinnedToCore(vUSB_playback_task, "USB Playback", 8192, NULL, 10, &usb_task, CORE0);
 
     // Calibration must only start from the AUTO_EQ_START BLE command path.
     // Do NOT call play_and_sample() here.

@@ -5,6 +5,8 @@
 #include "config_functions.h"
 #include "my_usb_device.h"
 #include "ble_control.h"
+#include <math.h>
+#include <string.h>
 
 static bool load_and_expand_wav_to_buffer(
     wave_reader_handle_t wav,
@@ -92,6 +94,70 @@ static void finish_calibration_run(bool success)
     }
 }
 
+static void reset_filter_states(void)
+{
+    memset(eq_w, 0, sizeof(eq_w));
+    memset(sub_lpf_w, 0, sizeof(sub_lpf_w));
+    memset(mid_hpf_w, 0, sizeof(mid_hpf_w));
+}
+
+static void refresh_filter_coeffs_if_needed(bool force_reset_states)
+{
+    static bool coeffs_initialized = false;
+    static float last_gains[EQ_BANDS] = {0};
+
+    bool gains_changed = force_reset_states || !coeffs_initialized;
+    if (!gains_changed) {
+        for (int i = 0; i < EQ_BANDS; i++) {
+            if (fabsf(app_sliders[i] - last_gains[i]) > 0.01f) {
+                gains_changed = true;
+                break;
+            }
+        }
+    }
+
+    if (!gains_changed) return;
+
+    const float crossover_f = 250.0f;
+    dsps_biquad_gen_lpf_f32(lpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
+    dsps_biquad_gen_hpf_f32(hpf_coeffs, crossover_f / SAMPLE_RATE, 0.707f);
+    for (int i = 0; i < EQ_BANDS; i++) {
+        my_dsps_biquad_gen_peakingEQ_f32(eq_coeffs[i], eq_freqs[i] / SAMPLE_RATE, app_sliders[i], 1.0f);
+        last_gains[i] = app_sliders[i];
+    }
+    coeffs_initialized = true;
+    reset_filter_states();
+}
+
+static inline int16_t clamp_to_i16(float x)
+{
+    if (x > 32767.0f) return 32767;
+    if (x < -32768.0f) return -32768;
+    return (int16_t)x;
+}
+
+static void process_stereo_pcm_inplace(int16_t *pcm, size_t frame_count)
+{
+    if (pcm == NULL || frame_count == 0 || !activate_eq) return;
+    for (size_t i = 0; i < frame_count; i++) {
+        float left_in = (float)pcm[i * 2 + 0] / 32768.0f;
+        float right_in = (float)pcm[i * 2 + 1] / 32768.0f;
+        float mono_sample = (left_in + right_in) * 0.4f;
+        float eq_sample = mono_sample;
+        for (int b = 0; b < EQ_BANDS; b++) {
+            float out = 0.0f;
+            dsps_biquad_f32_aes3(&eq_sample, &out, 1, eq_coeffs[b], eq_w[b]);
+            eq_sample = out;
+        }
+        float sub_sample = 0.0f;
+        float mid_sample = 0.0f;
+        dsps_biquad_f32_aes3(&eq_sample, &sub_sample, 1, lpf_coeffs, sub_lpf_w);
+        dsps_biquad_f32_aes3(&eq_sample, &mid_sample, 1, hpf_coeffs, mid_hpf_w);
+        pcm[i * 2 + 0] = clamp_to_i16(sub_sample * 32767.0f);
+        pcm[i * 2 + 1] = clamp_to_i16(mid_sample * 32767.0f);
+    }
+}
+
 void vSample_task(void *args)
 {
     configure_spi();
@@ -146,13 +212,17 @@ void vSample_task(void *args)
     float actual_fs = (float)N_SAMPLES / ((t_end - t_start) / 1000.0f);
     ESP_LOGI(SAMPLING_TAG, "Actual Sampling Frequency: %.2f Hz", actual_fs);
 
-    float *fir_taps = run_Auto_EQ_algorithm(samples, actual_fs);
-    if (fir_taps == NULL) {
+    float *band_gains = run_Auto_EQ_algorithm(samples, actual_fs);
+    if (band_gains == NULL) {
         finish_calibration_run(false);
         vTaskDelete(NULL);
         return;
     }
-    (void)fir_taps;
+    for (int i = 0; i < EQ_BANDS; i++) {
+        app_sliders[i] = band_gains[i];
+    }
+    free(band_gains);
+    activate_eq = true;
 
     finish_calibration_run(true);
     vTaskDelete(NULL);
@@ -265,6 +335,11 @@ void vPlay_WAV_task(void* args)
         return;
     }
 
+    if (activate_eq && !calibration_in_progress) {
+        refresh_filter_coeffs_if_needed(true);
+        process_stereo_pcm_inplace((int16_t *)playback_buf, total_output_bytes / FRAME_SIZE_BYTES);
+    }
+
     configure_i2s_for_wav(wav_sample_rate, stereo_output);
     if (mcu_tx == NULL) {
         ESP_LOGE(WAV_TAG, "WAV I2S TX channel was not created");
@@ -331,8 +406,14 @@ void vUSB_playback_task(void *arg)
         size_t bytes_received = 0;
         uint8_t *data = (uint8_t *)xRingbufferReceiveUpTo(audio_ringbuf, &bytes_received, portMAX_DELAY, 192);
         if (data) {
+            usb_running = true;
+            if (activate_eq && bytes_received >= FRAME_SIZE_BYTES) {
+                refresh_filter_coeffs_if_needed(false);
+                process_stereo_pcm_inplace((int16_t *)data, bytes_received / FRAME_SIZE_BYTES);
+            }
             size_t bytes_written = 0;
             i2s_channel_write(mcu_tx, data, bytes_received, &bytes_written, portMAX_DELAY);
+            usb_running = false;
             vRingbufferReturnItem(audio_ringbuf, data);
         }
     }

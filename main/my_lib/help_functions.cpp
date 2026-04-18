@@ -10,6 +10,8 @@
 #include "auto_eq_help.h"
 #include "my_tasks.h"
 #include "ble_control.h"
+#include "dsps_biquad_gen.h"
+#include "dsps_biquad.h"
 #include <math.h>
 
 void bm83_tx_ind_init(void) {
@@ -171,4 +173,36 @@ void play_and_sample()
         calibration_in_progress = false;
         ble_send_app_message("CAL_FAILED");
     }
+}
+
+void swap_bytes_16bit(uint8_t *buf, size_t len)
+{
+    for (size_t i = 0; i + 1 < len; i += 2) {
+        uint8_t tmp = buf[i];
+        buf[i] = buf[i + 1];
+        buf[i + 1] = tmp;
+    }
+}
+
+esp_err_t my_dsps_biquad_gen_peakingEQ_f32(float *coeffs, float f, float gain_db, float qFactor)
+{
+    if (coeffs == NULL) return ESP_ERR_INVALID_ARG;
+    if (qFactor <= 0.0001f) qFactor = 0.0001f;
+    float A = powf(10.0f, gain_db / 40.0f);
+    float w0 = 2.0f * (float)M_PI * f;
+    float c = cosf(w0);
+    float s = sinf(w0);
+    float alpha = s / (2.0f * qFactor);
+    float b0 = 1.0f + (alpha * A);
+    float b1 = -2.0f * c;
+    float b2 = 1.0f - (alpha * A);
+    float a0 = 1.0f + (alpha / A);
+    float a1 = -2.0f * c;
+    float a2 = 1.0f - (alpha / A);
+    coeffs[0] = b0 / a0;
+    coeffs[1] = b1 / a0;
+    coeffs[2] = b2 / a0;
+    coeffs[3] = a1 / a0;
+    coeffs[4] = a2 / a0;
+    return ESP_OK;
 }

@@ -69,6 +69,7 @@ extern "C" {
 #define TASK_A_READY_BIT  BIT0
 #define TASK_B_READY_BIT  BIT1
 #define ALL_TASKS_READY   (TASK_A_READY_BIT | TASK_B_READY_BIT)
+#define EQ_BANDS         9
 
 // GPIOs Declarations
 static const gpio_num_t MCU_WAKE	 	= GPIO_NUM_1;		// Wake up the MCU
@@ -109,6 +110,15 @@ static const uint32_t STACK_DEPTH = 4096;	// Stack allocation for FreeRTOS Tasks
 extern bool activate_eq;                    // Global flag to indicate whether to apply EQ or not 
 extern volatile bool wav_playback_active;     // True while the standalone WAV playback task is active
 extern volatile bool calibration_in_progress; // True while Auto-EQ calibration is running
+extern float eq_freqs[EQ_BANDS];
+extern float app_sliders[EQ_BANDS];
+extern float eq_w[EQ_BANDS][2];
+extern float sub_lpf_w[2];
+extern float mid_hpf_w[2];
+extern float eq_coeffs[EQ_BANDS][5];
+extern float lpf_coeffs[5];
+extern float hpf_coeffs[5];
+extern bool usb_running;
 
 // TAGS:
 extern const char *STORAGE_TAG;

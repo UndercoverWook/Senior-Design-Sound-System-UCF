@@ -20,6 +20,37 @@
 static const int CAL_NUM_POINTS = 256;
 static const float CAL_SENSITIVITY_1KHZ = -38.1f;  // dB re 1V/Pa at 1kHz
 
+static void calculate_band_gains_from_H(float *H, int fft_size, float sample_rate, float *out_gains)
+{
+    if (!H || !out_gains) return;
+    for (int b = 0; b < EQ_BANDS; b++) {
+        float low_f = eq_freqs[b] * 0.707f;
+        float high_f = eq_freqs[b] * 1.414f;
+        if (low_f < FREQ_START) low_f = FREQ_START;
+        if (high_f > FREQ_END) high_f = FREQ_END;
+        float sum_mag = 0.0f;
+        int count = 0;
+        for (int i = 1; i < fft_size / 2; i++) {
+            float bin_freq = (float)i * sample_rate / fft_size;
+            if (bin_freq >= low_f && bin_freq <= high_f) {
+                float re = H[i*2 + 0];
+                float im = H[i*2 + 1];
+                sum_mag += sqrtf(re * re + im * im);
+                count++;
+            }
+        }
+        if (count > 0) {
+            float avg_mag = sum_mag / (float)count;
+            float gain_db = -20.0f * log10f(avg_mag + 1e-6f);
+            if (gain_db > 12.0f) gain_db = 12.0f;
+            if (gain_db < -12.0f) gain_db = -12.0f;
+            out_gains[b] = gain_db;
+        } else {
+            out_gains[b] = 0.0f;
+        }
+    }
+}
+
 void show_FFT(float *fft_avg, int num_bins, float sample_rate)
 {
     if (!fft_avg) {
@@ -261,13 +292,10 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
 
     apply_calibration_to_fft(sample_fft, actual_freq);
     ble_publish_fft_bins_from_complex(sample_fft, actual_freq);
-    //show_FFT(sample_fft, NUM_BINS, actual_freq);
 
     float *H = compute_wiener_deconvolution(wav_fft, sample_fft, FFT_SIZE);
     free(wav_fft);
-    wav_fft = NULL;
     free(sample_fft);
-    sample_fft = NULL;
 
     if (H == NULL) {
         ESP_LOGE(EQ_TAG, "Wiener deconvolution failed");
@@ -275,41 +303,15 @@ float* run_Auto_EQ_algorithm(uint16_t* samples, float actual_freq)
         return NULL;
     }
 
-    float *correction_curve = calculate_correction_curve(H, FFT_SIZE);
+    float *band_gains = (float *)heap_caps_calloc(EQ_BANDS, sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (band_gains == NULL) {
+        free(H);
+        dsps_fft2r_deinit_fc32();
+        return NULL;
+    }
+
+    calculate_band_gains_from_H(H, FFT_SIZE, actual_freq, band_gains);
     free(H);
-    H = NULL;
-    if (correction_curve == NULL) {
-        ESP_LOGE(EQ_TAG, "Correction curve allocation failed");
-        dsps_fft2r_deinit_fc32();
-        return NULL;
-    }
-
-    correction_ifft(correction_curve, FFT_SIZE);
-
-    float *final_taps = (float *)heap_caps_calloc(FFT_SIZE, sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    float *window = (float *)heap_caps_malloc(FFT_SIZE * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-
-    if (!final_taps || !window) {
-        ESP_LOGE(EQ_TAG, "Tap/window alloc failed");
-        if (final_taps) free(final_taps);
-        if (window) free(window);
-        free(correction_curve);
-        dsps_fft2r_deinit_fc32();
-        return NULL;
-    }
-
-    dsps_wind_hann_f32(window, FFT_SIZE);
-
-    for (int i = 0; i < FFT_SIZE; i++) {
-        int shifted_idx = (i + (FFT_SIZE / 2)) % FFT_SIZE;
-        float raw_tap = correction_curve[shifted_idx * 2];
-        final_taps[i] = raw_tap * window[i];
-    }
-
-    free(window);
- //   free(correction_curve);
-
-    normalize_taps(final_taps);
     dsps_fft2r_deinit_fc32();
-    return final_taps;
+    return band_gains;
 }
