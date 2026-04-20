@@ -708,6 +708,17 @@ class _MyAppState extends State<MyApp> {
       return;
     }
 
+    final autoEq = _parseAutoEq(msg);
+    if (autoEq != null) {
+      if (!mounted) return;
+      setState(() {
+        for (int i = 0; i < kEqBandCount; i++) {
+          _eqBands[i] = autoEq[i];
+        }
+      });
+      return;
+    }
+
     if (!mounted) return;
 
     switch (msg.trim()) {
@@ -749,6 +760,28 @@ class _MyAppState extends State<MyApp> {
           _status = 'Calibration failed';
         });
         return;
+    }
+  }
+
+
+  List<double>? _parseAutoEq(String msg) {
+    if (!msg.startsWith("EQAUTO:")) return null;
+
+    try {
+      final csv = msg.substring(7).trim();
+      if (csv.isEmpty) return null;
+
+      final values = csv
+          .split(',')
+          .map((e) => double.tryParse(e.trim()))
+          .whereType<double>()
+          .toList();
+
+      if (values.length != kEqBandCount) return null;
+
+      return values.map((v) => v.clamp(-6.0, 6.0)).toList();
+    } catch (_) {
+      return null;
     }
   }
 
