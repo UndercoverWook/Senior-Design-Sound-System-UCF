@@ -150,7 +150,7 @@ static void process_stereo_pcm_inplace(int16_t *pcm, size_t frame_count)
     for (size_t i = 0; i < frame_count; i++) {
         float left_in = (float)pcm[i * 2 + 0] / 32768.0f;
         float right_in = (float)pcm[i * 2 + 1] / 32768.0f;
-        float mono_sample = (left_in + right_in) * 0.4f;
+        float mono_sample = (left_in + right_in) * 0.35f;
         float eq_sample = mono_sample;
         for (int b = 0; b < EQ_BANDS; b++) {
             float out = 0.0f;
@@ -229,7 +229,12 @@ void vSample_task(void *args)
     for (int i = 0; i < EQ_BANDS; ++i) {
         app_sliders[i] = band_gains[i];
     }
+
     activate_eq = true;
+    flush_required = true;
+    reset_filter_states();
+    ble_publish_auto_eq_gains(app_sliders);
+
     free(band_gains);
 
     finish_calibration_run(true);

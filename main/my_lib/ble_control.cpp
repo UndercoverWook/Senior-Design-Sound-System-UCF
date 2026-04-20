@@ -169,6 +169,31 @@ void ble_publish_fft_bins_from_complex(const float *fft_complex, float sample_ra
     ble_send_text_notification(msg);
 }
 
+
+void ble_publish_auto_eq_gains(const float *gains)
+{
+    if (gains == NULL) {
+        return;
+    }
+
+    char msg[160] = {0};
+    int offset = snprintf(msg, sizeof(msg), "EQAUTO:");
+
+    for (int i = 0; i < EQ_BANDS; ++i) {
+        offset += snprintf(
+            msg + offset,
+            sizeof(msg) - (size_t)offset,
+            (i == 0) ? "%.1f" : ",%.1f",
+            gains[i]);
+
+        if (offset >= (int)sizeof(msg)) {
+            break;
+        }
+    }
+
+    ble_send_text_notification(msg);
+}
+
 static int ble_find_eq_band_index(int band_hz)
 {
     for (int i = 0; i < EQ_BANDS; ++i) {
